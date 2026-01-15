@@ -1,0 +1,96 @@
+---
+name: tdd
+description: Practice integration-first TDD in this repo (Svelte + TS + Playwright). Write step-by-step user-interaction story tests with immutable “intent” comments and flexible implementation. When expectations are unclear or contradictory, switch to a focused Q&A mode and only change intent text with explicit user approval.
+---
+
+# TDD (Integration Stories) for MICE-app
+
+This repo’s default TDD style is **integration-first**: we describe user interaction flows end-to-end (browser + UI + persisted state) using **Playwright** tests under `tests/e2e/`.
+
+Unit tests (Vitest under `tests/unit/`) are allowed, but they are secondary: use them only for **pure, stable logic** where a UI story would be noisy (e.g. layout math, schema validation), and keep the UI stories as the source of truth for behavior.
+
+`npm test` runs the full test suite.
+
+## North Star
+
+- **Primary artifact**: a suite of **user-interaction stories** that read like step-by-step narratives.
+- **Two layers in each test**:
+  - **Intent (canonical, sacred)**: natural language, immutable unless the user authorizes a change.
+  - **Implementation (non-canonical)**: Playwright code and helper usage; may be edited freely (in line with intent).
+- **Integration bias**: prefer tests that exercise the app via **the same surfaces a user uses** (mouse/keyboard, rendered UI, persisted DB) rather than isolating functions.
+
+### Format: use `INTENT:BEGIN` / `INTENT:END` blocks inside tests
+
+In TypeScript Playwright tests, every story test must contain at least one canonical intent block like this:
+
+```ts
+/* INTENT:BEGIN
+Story: <short human name>
+Path: <stable path id>
+
+Steps:
+- <Step 1 intent: what the user does / sees / expects>
+- <Step 2 intent: ...>
+- <Step N intent: ...>
+INTENT:END */
+```
+
+**Constraints**
+- Keep the lines inside `INTENT:BEGIN` … `INTENT:END` **plain natural language**.
+- Keep the “Steps” lines **high-signal** and free of implementation details (no selectors, no helper names, no coordinates).
+- Don’t add “(temporary)” or sprint-specific wording.
+
+## Branching Stories (organize like a tree, not a list)
+
+User interaction stories branch. We model that explicitly so tests stay organized.
+
+### Story identity
+
+Each story has:
+- **Story name**: human readable
+- **Story ID**: stable slug used in describes/filenames (e.g. `insert-node-and-container`)
+- **Paths**: stable path IDs for each leaf behavior (e.g. `P0-happy`, `P1-cancel`, `P2-invalid`)
+
+### Recommended structure in Playwright
+
+- Use `test.describe('story:<story-id>', ...)` as the top-level grouping.
+- For each **leaf path**, create one `test('<path-id>: <short title>', ...)`.
+- Put the intent block near the top of each leaf test and ensure `Path:` matches the test title.
+- In implementation, factor shared setup into helpers (this is safe to refactor later).
+
+## What “Integration Test” Means Here
+
+### Prefer UI-level interactions
+
+For test determinism and speed, you may:
+- set up initial DB state directly (arrange)
+- query DB for assertions when a user-facing assertion would be brittle
+
+But do not let `page.evaluate` become the primary “behavior driver.” The behavioral act should still be **a user interaction** unless the story is explicitly about persistence/serialization.
+
+## The TDD Loop (how to work in this repo)
+
+1. **Pick a leaf path** (a specific story branch) and write/extend one Playwright test for it.
+2. Enter Q&A mode if the user's intent is unclear and write the **intent block first** and keep it stable.
+3. Implement the minimum Playwright steps to make the test **fail for the right reason**.
+4. Update product code to make it pass.
+5. Refactor test implementation (helpers, selectors, waits) without touching intent.
+
+## Q&A Mode (mandatory when expectations are unclear)
+
+Enter Q&A mode immediately if:
+- a story’s expected behavior is ambiguous,
+- two tests imply contradictory behavior,
+- the model constraints (slots/boundaries) conflict with a proposed interaction,
+- you think the intent text should change.
+
+### In Q&A mode, do this and only this
+
+- Ask **1–3 focused questions** about observable behavior.
+- Propose **a concrete diff** to the intent text (exact lines to add/remove/change).
+- Stop. **Do not change tests or product code** until the user authorizes the intent change.
+
+Once authorized:
+- apply the intent edit exactly as approved,
+- then return to implementation mode (update tests),
+- then update product code.
