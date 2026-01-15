@@ -58,16 +58,6 @@ Each story has:
 - Put the intent block near the top of each leaf test and ensure `Path:` matches the test title.
 - In implementation, factor shared setup into helpers (this is safe to refactor later).
 
-## What “Integration Test” Means Here
-
-### Prefer UI-level interactions
-
-For test determinism and speed, you may:
-- set up initial DB state directly (arrange)
-- query DB for assertions when a user-facing assertion would be brittle
-
-But do not let `page.evaluate` become the primary “behavior driver.” The behavioral act should still be **a user interaction** unless the story is explicitly about persistence/serialization.
-
 ## The TDD Loop (how to work in this repo)
 
 1. **Pick a leaf path** (a specific story branch) and write/extend one Playwright test for it.
