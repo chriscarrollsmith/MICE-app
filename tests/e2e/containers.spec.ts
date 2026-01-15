@@ -578,3 +578,107 @@ test.describe('story:create-container', () => {
     expect(strokeWidth).toBeDefined();
   });
 });
+
+test.describe('story:wrap-thread-in-container', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupFreshPage(page);
+  });
+
+  test('P0-no-overlap: container boundaries do not visually or logically overlap thread nodes', async ({ page }) => {
+    /* INTENT:BEGIN
+    Story: Wrap a thread in a container
+    Path: P0-no-overlap
+    Steps:
+    - The user creates a thread (open then close) on an empty canvas.
+    - The user creates a container that wraps that thread.
+    - The container boundaries do not occupy the same slot position as any node, and do not visually collapse onto the nodes.
+    INTENT:END */
+
+    const svg = page.locator('[data-testid="timeline-svg"]');
+    const box = await svg.boundingBox();
+    expect(box).not.toBeNull();
+
+    if (!box) return;
+
+    // Create a thread via the two-step flow
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    const miceGrid = page.locator('[data-testid="mice-grid"]');
+    await expect(miceGrid).toBeVisible({ timeout: 2000 });
+    const milieuCell = miceGrid.locator('[data-type="milieu"]');
+    await milieuCell.dispatchEvent('click');
+    await page.waitForTimeout(200);
+
+    // Hover valid close location to show preview and click it to complete
+    await page.mouse.move(box.x + (box.width * 3) / 4, box.y + box.height / 2);
+    const closePreview = page.locator('[data-testid="close-node-preview"]');
+    await expect(closePreview).toBeVisible({ timeout: 2000 });
+    await closePreview.dispatchEvent('click');
+    await page.waitForTimeout(300);
+
+    // Sanity: we have a complete thread
+    const nodeCount = await page.evaluate(() => {
+      const db = (window as any).__db;
+      const result = db.exec('SELECT COUNT(*) FROM nodes');
+      return result[0]?.values[0]?.[0] ?? 0;
+    });
+    expect(nodeCount).toBe(2);
+
+    // Create a container that wraps the thread: start before open, end after close
+    // Start container creation at the left side of the row
+    await page.mouse.move(box.x + 2, box.y + 15);
+    const containerHandle = page.locator('[data-testid="container-handle"]');
+    await expect(containerHandle).toBeVisible({ timeout: 2000 });
+    await containerHandle.dispatchEvent('click');
+    await page.waitForTimeout(200);
+
+    // Finish at the right side of the row
+    await page.mouse.move(box.x + box.width - 2, box.y + 15);
+    const containerHandleEnd = page.locator('[data-testid="container-handle"]');
+    await expect(containerHandleEnd).toBeVisible({ timeout: 2000 });
+    await containerHandleEnd.dispatchEvent('click');
+    await page.waitForTimeout(300);
+
+    // Verify container exists
+    const { containerBoundaries, nodeSlots } = await page.evaluate(() => {
+      const db = (window as any).__db;
+      const c = db.exec('SELECT start_slot, end_slot FROM containers ORDER BY start_slot LIMIT 1');
+      const n = db.exec('SELECT slot FROM nodes ORDER BY slot');
+      const start = c[0]?.values?.[0]?.[0];
+      const end = c[0]?.values?.[0]?.[1];
+      const slots = n[0]?.values?.map((r: any[]) => r[0]) ?? [];
+      return { containerBoundaries: [start, end], nodeSlots: slots };
+    });
+
+    // ASSERTION: container boundary slots must not intersect node slots
+    for (const nodeSlot of nodeSlots) {
+      expect(containerBoundaries).not.toContain(nodeSlot);
+    }
+
+    // ASSERTION: visually, container left border should not collapse onto the open node.
+    // Use SVG coordinates (CTM / attributes) rather than bounding boxes to avoid stroke/text effects.
+    const openNode = page.locator('[data-testid="node"]').first();
+    const containerSegment = page.locator('[data-testid="container-segment"]').first();
+    await expect(openNode).toBeVisible();
+    await expect(containerSegment).toBeVisible();
+
+    const openNodeX = await openNode.evaluate((el) => {
+      const g = el as unknown as SVGGElement;
+      return g.getCTM()?.e ?? null;
+    });
+    const containerStartX = await containerSegment
+      .locator('rect.hit-area')
+      .first()
+      .evaluate((el) => {
+        const x = el.getAttribute('x');
+        return x === null ? null : parseFloat(x);
+      });
+
+    expect(openNodeX).not.toBeNull();
+    expect(containerStartX).not.toBeNull();
+
+    if (openNodeX !== null && containerStartX !== null) {
+      // If these are nearly equal, the boundary and node have collapsed visually
+      expect(Math.abs(openNodeX - containerStartX)).toBeGreaterThan(10);
+    }
+  });
+});

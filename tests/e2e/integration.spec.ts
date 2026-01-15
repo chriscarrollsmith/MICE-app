@@ -43,11 +43,26 @@ test.describe('story:full-workflow', () => {
       });
       expect(state?.mode).toBe('placing-node-close');
 
+      const closePreview = page.locator('[data-testid="close-node-preview"]');
+      const previewArc = page.locator('[data-testid="thread-preview-arc"]');
+
+      // Hover an invalid close location - no preview
+      await page.mouse.move(box.x + 2, box.y + box.height / 2);
+      await page.waitForTimeout(200);
+      await expect(closePreview).not.toBeVisible();
+      await expect(previewArc).not.toBeVisible();
+
+      // Hover a valid close location - preview appears
       await page.mouse.move(box.x + (box.width * 3) / 4, box.y + box.height / 2);
       await page.waitForTimeout(200);
-      const closeHandle = page.locator('[data-testid="mice-grid"], [data-testid="close-node-handle"]');
-      await expect(closeHandle.first()).toBeVisible({ timeout: 2000 });
-      await closeHandle.first().dispatchEvent('click');
+      await expect(closePreview).toBeVisible({ timeout: 2000 });
+      await expect(previewArc).toBeVisible({ timeout: 2000 });
+
+      const previewOpacity = await closePreview.getAttribute('opacity');
+      expect(previewOpacity).toBeTruthy();
+      expect(parseFloat(previewOpacity || '1')).toBeLessThan(1);
+
+      await closePreview.dispatchEvent('click');
       await page.waitForTimeout(500);
 
       // Verify nodes were created and no containers were auto-created

@@ -287,7 +287,8 @@ test.describe('story:insert-thread', () => {
     Path: P3-two-step-complete
     Steps:
     - The user has placed the opening node and is choosing where to place the closing node.
-    - The user places the closing node at a valid location.
+    - When the user hovers near a valid closing-node insert location, the UI shows a semi-transparent preview of the closing node and the arc connecting it to the opening node, and does not show that preview at invalid closing-node locations.
+    - The user clicks the preview closing node to place the closing node.
     - The thread is complete and the UI returns to the idle interaction state.
     INTENT:END */
 
@@ -310,13 +311,29 @@ test.describe('story:insert-thread', () => {
       });
       expect(state?.mode).toBe('placing-node-close');
 
-      // Choose a close placement (implementation may use a dedicated handle or reuse the grid)
+      const closePreview = page.locator('[data-testid="close-node-preview"]');
+      const previewArc = page.locator('[data-testid="thread-preview-arc"]');
+
+      // Hover an invalid close location (at/before the open node) - no preview
+      await page.mouse.move(box.x + 2, box.y + box.height / 2);
+      await page.waitForTimeout(200);
+
+      await expect(closePreview).not.toBeVisible();
+      await expect(previewArc).not.toBeVisible();
+
+      // Hover a valid close location - preview appears
       await page.mouse.move(box.x + (box.width * 3) / 4, box.y + box.height / 2);
       await page.waitForTimeout(200);
 
-      const closeHandle = page.locator('[data-testid="mice-grid"], [data-testid="close-node-handle"]');
-      await expect(closeHandle.first()).toBeVisible({ timeout: 2000 });
-      await closeHandle.first().dispatchEvent('click');
+      await expect(closePreview).toBeVisible({ timeout: 2000 });
+      await expect(previewArc).toBeVisible({ timeout: 2000 });
+
+      const previewOpacity = await closePreview.getAttribute('opacity');
+      expect(previewOpacity).toBeTruthy();
+      expect(parseFloat(previewOpacity || '1')).toBeLessThan(1);
+
+      // Click preview node to commit placement
+      await closePreview.dispatchEvent('click');
       await page.waitForTimeout(300);
 
       // Verify: two nodes exist now
@@ -422,12 +439,13 @@ test.describe('story:insert-thread', () => {
         await characterCell.dispatchEvent('click');
         await page.waitForTimeout(200);
 
-        // Place the close node to complete the thread
+        // Place the close node to complete the thread (hover shows preview; click preview commits)
         await page.mouse.move(midX + 40, box.y + box.height / 2);
         await page.waitForTimeout(200);
-        const closeHandle = page.locator('[data-testid="mice-grid"], [data-testid="close-node-handle"]');
-        await expect(closeHandle.first()).toBeVisible({ timeout: 2000 });
-        await closeHandle.first().dispatchEvent('click');
+
+        const closePreview = page.locator('[data-testid="close-node-preview"]');
+        await expect(closePreview).toBeVisible({ timeout: 2000 });
+        await closePreview.dispatchEvent('click');
         await page.waitForTimeout(500);
 
         // Verify: Now have 4 nodes

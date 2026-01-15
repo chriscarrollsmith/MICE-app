@@ -4,6 +4,7 @@
     containers,
     nodes,
     addContainer,
+    addContainerAvoidingNodeOverlap,
     insertOpenNodeAtBoundary,
     insertCloseNodeAtBoundary,
     updateNode,
@@ -157,10 +158,10 @@
         const defaultEndSlot = 1;
         addContainer(startSlot, defaultEndSlot, interaction.parentId);
       } else if (endSlot > interaction.startSlot) {
-        addContainer(interaction.startSlot, endSlot, interaction.parentId);
+        addContainerAvoidingNodeOverlap(interaction.startSlot, endSlot, interaction.parentId);
       } else if (endSlot < interaction.startSlot) {
         // Allow right-to-left container creation by swapping
-        addContainer(endSlot, interaction.startSlot, interaction.parentId);
+        addContainerAvoidingNodeOverlap(endSlot, interaction.startSlot, interaction.parentId);
       }
 
       interaction = { mode: 'idle' };
@@ -284,6 +285,20 @@
     }
   }
 
+  function handleClosePreviewClick() {
+    if (interaction.mode !== 'placing-node-close') return;
+    if (hoveredBoundary === null) return;
+    if (hoveredBoundary <= interaction.openSlot) return;
+
+    insertCloseNodeAtBoundary(interaction.openNodeId, hoveredBoundary)
+      .then(() => {
+        interaction = { mode: 'idle' };
+      })
+      .catch(() => {
+        interaction = { mode: 'idle' };
+      });
+  }
+
   // Check if mouse is directly over a node (within the node's visual bounds)
   // We don't show the insert handle when hovering directly on a node
   function isMouseOverNode(): boolean {
@@ -354,6 +369,39 @@
   // Get the boundary position for the current hoveredBoundary
   $: currentBoundaryPosition = hoveredBoundary !== null
     ? boundaryPositions.find(b => b.boundary === hoveredBoundary)
+    : null;
+
+  // Two-step close placement preview (hover shows a semi-transparent close node + arc; click commits)
+  $: openNodeForClosePreview =
+    interaction.mode === 'placing-node-close'
+      ? $nodes.find((n) => n.id === interaction.openNodeId) ?? null
+      : null;
+
+  $: closePreviewVisible =
+    interaction.mode === 'placing-node-close' &&
+    hoveredZone === 'node' &&
+    hoveredBoundary !== null &&
+    currentBoundaryPosition !== null &&
+    hoveredBoundary > interaction.openSlot;
+
+  $: closePreview = closePreviewVisible && openNodeForClosePreview && currentBoundaryPosition
+    ? {
+        x: currentBoundaryPosition.x,
+        y: currentBoundaryPosition.row * config.rowHeight + config.rowHeight / 2,
+        row: currentBoundaryPosition.row,
+        boundary: hoveredBoundary!,
+        color: MICE_COLORS[openNodeForClosePreview.type],
+        arcPath: (() => {
+          const openPos = layout.positions.get(interaction.openSlot);
+          if (!openPos) return null;
+          const baseY = currentBoundaryPosition.row * config.rowHeight + config.rowHeight / 2;
+          const startX = openPos.x;
+          const endX = currentBoundaryPosition.x;
+          const midX = (startX + endX) / 2;
+          const controlY = baseY - config.rowHeight * 0.3;
+          return `M ${startX} ${baseY} Q ${midX} ${controlY} ${endX} ${baseY}`;
+        })(),
+      }
     : null;
 
   // Get editing node for popover
@@ -458,12 +506,12 @@
     <!-- Hide when over nodes or container interactive areas (borders, title, trash button) -->
     {#if hoveredBoundary !== null && hoveredZone !== null && currentBoundaryPosition && interaction.mode !== 'editing-node' && !isMouseOverNode() && !isMouseOverContainerInteractiveArea()}
       {@const handleY = currentBoundaryPosition.row * config.rowHeight + (hoveredZone === 'container' ? config.containerZoneHeight / 2 : config.rowHeight / 2)}
-      {@const nodeMode = interaction.mode === 'placing-node-close' ? 'close' : 'start'}
-      {@const nodeHandleValid = interaction.mode === 'placing-node-close' ? (hoveredZone === 'node' && hoveredBoundary > interaction.openSlot) : true}
+      {@const nodeMode = 'start'}
+      {@const nodeHandleValid = true}
       {@const containerHandleValid = interaction.mode === 'placing-container-end' ? (hoveredZone === 'container') : true}
       {@const shouldShowHandle =
         interaction.mode === 'placing-node-close'
-          ? (hoveredZone === 'node' && hoveredBoundary > interaction.openSlot)
+          ? false
           : interaction.mode === 'placing-container-end'
             ? (hoveredZone === 'container')
             : true}
@@ -481,6 +529,32 @@
           on:nodeCloseClick={handleCloseNodeHandleClick}
         />
       {/if}
+    {/if}
+
+    {#if closePreview}
+      {#if closePreview.arcPath}
+        <path
+          d={closePreview.arcPath}
+          fill="none"
+          stroke={closePreview.color}
+          stroke-width="2"
+          opacity="0.35"
+          data-testid="thread-preview-arc"
+          style="pointer-events: none"
+        />
+      {/if}
+
+      <g
+        transform="translate({closePreview.x}, {closePreview.y})"
+        opacity="0.45"
+        data-testid="close-node-preview"
+        on:click|stopPropagation={handleClosePreviewClick}
+        on:keydown={(e) => e.key === 'Enter' && handleClosePreviewClick()}
+        role="button"
+        tabindex="0"
+      >
+        <circle r="12" fill={closePreview.color} />
+      </g>
     {/if}
 
     <!-- Preview during container creation -->

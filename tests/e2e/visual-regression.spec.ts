@@ -113,11 +113,11 @@ test.describe('story:visual-regression', () => {
       await expect(characterCell).toBeVisible({ timeout: 2000 });
       await characterCell.dispatchEvent('click');
 
-      // Complete two-step creation by placing the close node
+      // Complete two-step creation by clicking the close-node preview
       await page.mouse.move(box.x + (box.width * 3) / 4, box.y + box.height / 2);
-      const closeHandle = page.locator('[data-testid="close-node-handle"]');
-      await expect(closeHandle).toBeVisible({ timeout: 2000 });
-      await closeHandle.dispatchEvent('click');
+      const closePreview = page.locator('[data-testid="close-node-preview"]');
+      await expect(closePreview).toBeVisible({ timeout: 2000 });
+      await closePreview.dispatchEvent('click');
       await page.waitForTimeout(500);
 
       // Move mouse away to hide hover elements
@@ -162,11 +162,11 @@ test.describe('story:visual-regression', () => {
       await expect(characterCell).toBeVisible({ timeout: 2000 });
       await characterCell.dispatchEvent('click');
 
-      // Complete two-step creation by placing the close node
+      // Complete two-step creation by clicking the close-node preview
       await page.mouse.move(box.x + (box.width * 3) / 4, box.y + box.height / 2);
-      const closeHandle = page.locator('[data-testid="close-node-handle"]');
-      await expect(closeHandle).toBeVisible({ timeout: 2000 });
-      await closeHandle.dispatchEvent('click');
+      const closePreview = page.locator('[data-testid="close-node-preview"]');
+      await expect(closePreview).toBeVisible({ timeout: 2000 });
+      await closePreview.dispatchEvent('click');
       await page.waitForTimeout(500);
 
       // Verify nodes were created
@@ -210,11 +210,11 @@ test.describe('story:visual-regression', () => {
       await expect(characterCell).toBeVisible({ timeout: 2000 });
       await characterCell.dispatchEvent('click');
 
-      // Complete two-step creation by placing the close node
+      // Complete two-step creation by clicking the close-node preview
       await page.mouse.move(box.x + (box.width * 3) / 4, box.y + box.height / 2);
-      const closeHandle = page.locator('[data-testid="close-node-handle"]');
-      await expect(closeHandle).toBeVisible({ timeout: 2000 });
-      await closeHandle.dispatchEvent('click');
+      const closePreview = page.locator('[data-testid="close-node-preview"]');
+      await expect(closePreview).toBeVisible({ timeout: 2000 });
+      await closePreview.dispatchEvent('click');
       await page.waitForTimeout(500);
 
       // Move mouse away

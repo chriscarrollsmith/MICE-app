@@ -101,6 +101,50 @@ export async function addContainer(
   return container;
 }
 
+/**
+ * Create a container while enforcing the constraint that container boundary slots
+ * are not occupied by nodes. If a node currently occupies the start or end slot,
+ * shift timeline slots to make room and keep the intended span.
+ */
+export async function addContainerAvoidingNodeOverlap(
+  startSlot: number,
+  endSlot: number,
+  parentId: string | null = null,
+  title: string = ''
+): Promise<Container> {
+  const db = getDatabase();
+  if (!db) throw new Error('Database not initialized');
+
+  let s = Math.min(startSlot, endSlot);
+  let e = Math.max(startSlot, endSlot);
+
+  if (e <= s) {
+    throw new Error('Container must have positive width');
+  }
+
+  const hasNodeAt = (slot: number): boolean => {
+    const res = db.exec('SELECT COUNT(*) FROM nodes WHERE slot = ?', [slot]);
+    return (res[0]?.values?.[0]?.[0] ?? 0) > 0;
+  };
+
+  // If start boundary collides with a node, shift everything at/after start right by 1.
+  // This also shifts the intended end boundary right by 1.
+  if (hasNodeAt(s)) {
+    await shiftSlots(s, 1);
+    e += 1;
+  }
+
+  // If end boundary collides with a node, shift everything at/after end right by 1.
+  if (hasNodeAt(e)) {
+    await shiftSlots(e, 1);
+  }
+
+  const container = await addContainer(s, e, parentId, title);
+  // Ensure in-memory stores reflect any slot shifts performed above.
+  loadFromDb();
+  return container;
+}
+
 export async function updateContainer(
   id: string,
   updates: Partial<Pick<Container, 'title'>>
