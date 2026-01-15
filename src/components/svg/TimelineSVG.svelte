@@ -476,6 +476,8 @@
     bind:this={svgElement}
     width="100%"
     height={svgHeight}
+    role="application"
+    aria-label="Timeline editor"
     on:mousemove={handleMouseMove}
     on:mouseleave={handleMouseLeave}
     data-testid="timeline-svg"
