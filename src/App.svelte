@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Timeline from './components/Timeline.svelte';
+  import TimelineSVG from './components/svg/TimelineSVG.svelte';
   import Toolbar from './components/Toolbar.svelte';
 </script>
 
@@ -7,7 +7,7 @@
   <Toolbar />
   <main>
     <div class="content">
-      <Timeline />
+      <TimelineSVG />
     </div>
   </main>
 </div>

@@ -1,6 +1,6 @@
 import initSqlJs, { type Database } from 'sql.js';
 import { get, set } from 'idb-keyval';
-import { createTables } from './schema';
+import { createTables, migrateIfNeeded } from './schema';
 
 const DB_STORAGE_KEY = 'mice-app-database';
 
@@ -16,9 +16,19 @@ export async function initDatabase(): Promise<Database> {
 
   if (savedData) {
     db = new SQL.Database(savedData);
+    // Check for schema migration needs
+    const migrated = migrateIfNeeded(db);
+    if (migrated) {
+      // Save the migrated database
+      const data = db.export();
+      await set(DB_STORAGE_KEY, data);
+    }
   } else {
     db = new SQL.Database();
     createTables(db);
+    // Create schema version table for new databases
+    db.run('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER)');
+    db.run('INSERT INTO schema_version (version) VALUES (?)', [2]);
   }
 
   // Expose for testing (development only)

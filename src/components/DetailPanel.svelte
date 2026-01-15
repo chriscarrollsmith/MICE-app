@@ -16,7 +16,7 @@
       description = node.description;
     } else if (container) {
       title = container.title;
-      description = container.description;
+      description = ''; // Containers don't have descriptions
     }
   }
 
@@ -60,17 +60,19 @@
         />
       </div>
 
-      <div class="form-group">
-        <label for="description">Description</label>
-        <textarea
-          id="description"
-          name="description"
-          value={description}
-          on:input={handleDescriptionChange}
-          placeholder="Enter description..."
-          rows="4"
-        ></textarea>
-      </div>
+      {#if node}
+        <div class="form-group">
+          <label for="description">Description</label>
+          <textarea
+            id="description"
+            name="description"
+            value={description}
+            on:input={handleDescriptionChange}
+            placeholder="Enter description..."
+            rows="4"
+          ></textarea>
+        </div>
+      {/if}
     </div>
   </div>
 {/if}

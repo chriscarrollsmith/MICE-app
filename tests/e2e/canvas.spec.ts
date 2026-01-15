@@ -1,41 +1,71 @@
 import { test, expect } from '@playwright/test';
+import { setupFreshPage } from './helpers';
 
-test('canvas renders on page load', async ({ page }) => {
-  await page.goto('/');
-  const canvas = page.locator('canvas');
-  await expect(canvas).toBeVisible();
-
-  // Canvas should have reasonable dimensions
-  const box = await canvas.boundingBox();
-  expect(box).not.toBeNull();
-  expect(box!.width).toBeGreaterThan(400);
-  expect(box!.height).toBeGreaterThan(200);
-});
-
-test('canvas draws timeline track line', async ({ page }) => {
-  await page.goto('/');
-  const canvas = page.locator('canvas');
-  await expect(canvas).toBeVisible();
-
-  // Verify canvas has drawn something (not entirely white/blank)
-  const hasContent = await page.evaluate(() => {
-    const canvas = document.querySelector('canvas');
-    if (!canvas) return false;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return false;
-
-    // Check middle of canvas for timeline track
-    const y = canvas.height * 0.6; // Node zone area
-    const imageData = ctx.getImageData(0, y, canvas.width, 1).data;
-
-    // Look for non-white pixels (the track line)
-    for (let i = 0; i < imageData.length; i += 4) {
-      if (imageData[i] !== 255 || imageData[i + 1] !== 255 || imageData[i + 2] !== 255) {
-        return true;
-      }
-    }
-    return false;
+test.describe('story:timeline-svg-rendering', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupFreshPage(page);
   });
 
-  expect(hasContent).toBe(true);
+  test('timeline SVG renders on page load', async ({ page }) => {
+    /* INTENT:BEGIN
+    Story: Timeline SVG rendering
+    Path: P0-svg-visible
+    Steps:
+    - The user opens the app on a fresh page.
+    - The timeline SVG is visible with reasonable dimensions.
+    INTENT:END */
+
+    const svg = page.locator('[data-testid="timeline-svg"]');
+    await expect(svg).toBeVisible();
+
+    // SVG should have reasonable dimensions
+    const box = await svg.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeGreaterThan(400);
+    expect(box!.height).toBeGreaterThan(80);
+  });
+
+  test('timeline SVG contains track line', async ({ page }) => {
+    /* INTENT:BEGIN
+    Story: Timeline SVG rendering
+    Path: P1-track-line-present
+    Steps:
+    - The user opens the app on a fresh page.
+    - The timeline track line is present inside the SVG.
+    INTENT:END */
+
+    const svg = page.locator('[data-testid="timeline-svg"]');
+    await expect(svg).toBeVisible();
+
+    // Verify track line element exists
+    const trackLine = svg.locator('.track-line');
+    await expect(trackLine.first()).toBeAttached();
+  });
+
+  test('timeline container has correct styling', async ({ page }) => {
+    /* INTENT:BEGIN
+    Story: Timeline SVG rendering
+    Path: P2-container-styling
+    Steps:
+    - The user opens the app on a fresh page.
+    - The timeline container has expected baseline styling (background and rounded corners).
+    INTENT:END */
+
+    const container = page.locator('.timeline-container');
+    await expect(container).toBeVisible();
+
+    // Check it has white background and border
+    const styles = await container.evaluate((el) => {
+      const computed = window.getComputedStyle(el);
+      return {
+        background: computed.backgroundColor,
+        borderRadius: computed.borderRadius,
+      };
+    });
+
+    // Background should be white (rgb(255, 255, 255))
+    expect(styles.background).toContain('255');
+    // Should have rounded corners
+    expect(styles.borderRadius).not.toBe('0px');
+  });
 });

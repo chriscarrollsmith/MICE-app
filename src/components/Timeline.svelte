@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { createRenderer, render, resizeCanvas, type RenderContext, type RenderState } from '../canvas/renderer';
-  import { containers, nodes, addContainer, addThread, updateNode, updateContainer, deleteThread, deleteContainer } from '../stores/story';
+  import { containers, nodes, addContainer, addThread, addOpenNode, completeThread, deleteNode, updateNode, updateContainer, deleteThread, deleteContainer } from '../stores/story';
   import { get } from 'svelte/store';
   import { InteractionManager, type InteractionState, type InteractionCallbacks } from '../canvas/interactions';
-  import { isInNodeZone, getTimelinePosition, findContainerAtPosition, findNodeAtPosition } from '../canvas/hitDetection';
+  import { isInNodeZone, getTimelinePosition, findContainerAtSlot, findNodeAtPosition, getSlotFromX } from '../canvas/hitDetection';
+  import { getTotalSlots } from '../lib/slots';
   import type { MiceType, Container, StoryNode } from '../lib/types';
   import HoverGrid from './HoverGrid.svelte';
   import DetailPanel from './DetailPanel.svelte';
@@ -21,7 +22,7 @@
   let hoverGridX = 0;
   let hoverGridY = 0;
   let hoverGridContainer: Container | null = null;
-  let hoverGridPosition = 0;
+  let hoverGridSlot = 0;
 
   // Context menu state
   let contextMenuVisible = false;
@@ -102,15 +103,16 @@
 
     // Don't show grid if hovering over an existing node
     const nodeData = get(nodes);
-    const existingNode = findNodeAtPosition(x, y, nodeData, canvasWidth, canvasHeight);
+    const containerData = get(containers);
+    const totalSlots = getTotalSlots(containerData, nodeData);
+    const existingNode = findNodeAtPosition(x, y, nodeData, canvasWidth, canvasHeight, totalSlots);
     if (existingNode) {
       hoverGridVisible = false;
       return;
     }
 
-    const position = getTimelinePosition(x, canvasWidth);
-    const containerData = get(containers);
-    const container = findContainerAtPosition(position, containerData);
+    const slot = getSlotFromX(x, canvasWidth, Math.max(1, totalSlots));
+    const container = findContainerAtSlot(slot, containerData);
 
     // Show the grid even if no container exists (allows creating first node)
     // Center the grid on the timeline track (at 60% of canvas height), not on cursor
@@ -119,26 +121,32 @@
     hoverGridX = x;
     hoverGridY = trackLineY;
     hoverGridContainer = container; // May be null for empty timeline
-    hoverGridPosition = position;
+    hoverGridSlot = slot;
   }
 
   async function handleHoverGridSelect(type: MiceType) {
-    if (!interactionManager) return;
-
-    let containerId: string;
-
-    if (hoverGridContainer) {
-      // Use existing container
-      containerId = hoverGridContainer.id;
-    } else {
-      // No container exists - create a root container spanning the full timeline
-      const newContainer = await addContainer(0.05, 0.95, null);
-      containerId = newContainer.id;
+    console.log('[handleHoverGridSelect] Called with type:', type);
+    if (!interactionManager) {
+      console.log('[handleHoverGridSelect] No interaction manager!');
+      return;
     }
 
-    // Start node creation
-    interactionManager.startNodeCreation(type, hoverGridPosition, containerId);
-    hoverGridVisible = false;
+    // Get container ID (null if no container - nodes can exist without containers)
+    const containerId = hoverGridContainer?.id ?? null;
+    console.log('[handleHoverGridSelect] containerId:', containerId, 'slot:', hoverGridSlot);
+
+    try {
+      // Create the open node immediately
+      const openNode = await addOpenNode(containerId, type, hoverGridSlot);
+      console.log('[handleHoverGridSelect] Created open node:', openNode.id);
+
+      // Start node creation mode, tracking the temp open node for potential cancellation
+      interactionManager.startNodeCreation(type, hoverGridSlot, containerId, openNode.id);
+      console.log('[handleHoverGridSelect] Started node creation, state:', interactionManager.getState());
+      hoverGridVisible = false;
+    } catch (error) {
+      console.error('[handleHoverGridSelect] Error:', error);
+    }
   }
 
   function handleClick(event: MouseEvent) {
@@ -168,7 +176,9 @@
 
     // Check if right-clicking on a node
     const nodeData = get(nodes);
-    const clickedNode = findNodeAtPosition(x, y, nodeData, rect.width, rect.height);
+    const containerData = get(containers);
+    const totalSlots = getTotalSlots(containerData, nodeData);
+    const clickedNode = findNodeAtPosition(x, y, nodeData, rect.width, rect.height, totalSlots);
 
     if (clickedNode) {
       contextMenuVisible = true;
@@ -204,11 +214,22 @@
     renderContext = createRenderer(canvasElement);
 
     const callbacks: InteractionCallbacks = {
-      onContainerCreate: async (startPos, endPos, parentId) => {
-        await addContainer(startPos, endPos, parentId);
+      onContainerCreate: async (startSlot, endSlot, parentId) => {
+        await addContainer(startSlot, endSlot, parentId);
       },
-      onNodeCreate: async (containerId, type, openPos, closePos) => {
-        await addThread(containerId, type, openPos, closePos);
+      onNodeCreate: async (containerId, type, openSlot, closeSlot) => {
+        await addThread(containerId, type, openSlot, closeSlot);
+      },
+      onThreadComplete: async (openNodeId, closeSlot) => {
+        // Find the open node to get its threadId
+        const nodeData = get(nodes);
+        const openNode = nodeData.find(n => n.id === openNodeId);
+        if (openNode) {
+          await completeThread(openNode.threadId, closeSlot);
+        }
+      },
+      onNodeCancel: async (nodeId) => {
+        await deleteNode(nodeId);
       },
       onSelect: (type, id) => {
         selectedElement = { type, id };
@@ -246,6 +267,7 @@
     if (typeof window !== 'undefined') {
       (window as any).__redrawCanvas = draw;
       (window as any).__interactionManager = interactionManager;
+      (window as any).__timelineInteraction = () => interactionState;
     }
 
     return () => {

@@ -86,11 +86,9 @@ Enter Q&A mode immediately if:
 
 ### In Q&A mode, do this and only this
 
-- Ask **1–3 focused questions** about observable behavior.
-- Propose **a concrete diff** to the intent text (exact lines to add/remove/change).
-- Stop. **Do not change tests or product code** until the user authorizes the intent change.
+1. Ask **1 focused question at a time** about observable behavior.
+2. Propose **a concrete diff** to the intent text (exact lines to add/remove/change).
+3. Repeat steps 1 and/or 2 until the user authorizes the intent change, then make the approved changes.
 
-Once authorized:
-- apply the intent edit exactly as approved,
-- then return to implementation mode (update tests),
-- then update product code.
+Then return to implementation mode (update tests), then update product code.
+

@@ -24,7 +24,7 @@ export function loadFromDb(): void {
   if (!db) return;
 
   // Load containers
-  const containerResults = db.exec('SELECT * FROM containers ORDER BY start_position');
+  const containerResults = db.exec('SELECT * FROM containers ORDER BY start_slot');
   if (containerResults.length > 0) {
     const cols = containerResults[0].columns;
     const rows = containerResults[0].values;
@@ -43,7 +43,7 @@ export function loadFromDb(): void {
   }
 
   // Load nodes
-  const nodeResults = db.exec('SELECT * FROM nodes ORDER BY position');
+  const nodeResults = db.exec('SELECT * FROM nodes ORDER BY slot');
   if (nodeResults.length > 0) {
     const cols = nodeResults[0].columns;
     const rows = nodeResults[0].values;
@@ -63,11 +63,10 @@ export function loadFromDb(): void {
 
 // Container operations
 export async function addContainer(
-  startPosition: number,
-  endPosition: number,
+  startSlot: number,
+  endSlot: number,
   parentId: string | null = null,
-  title: string = '',
-  description: string = ''
+  title: string = ''
 ): Promise<Container> {
   const db = getDatabase();
   if (!db) throw new Error('Database not initialized');
@@ -76,37 +75,35 @@ export async function addContainer(
     id: generateId(),
     parentId,
     title,
-    description,
-    startPosition,
-    endPosition,
+    startSlot,
+    endSlot,
     createdAt: now(),
     updatedAt: now(),
   };
 
   db.run(
-    `INSERT INTO containers (id, parent_id, title, description, start_position, end_position, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO containers (id, parent_id, title, start_slot, end_slot, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
     [
       container.id,
       container.parentId,
       container.title,
-      container.description,
-      container.startPosition,
-      container.endPosition,
+      container.startSlot,
+      container.endSlot,
       container.createdAt,
       container.updatedAt,
     ]
   );
 
   await saveDatabase();
-  containers.update((c) => [...c, container].sort((a, b) => a.startPosition - b.startPosition));
+  containers.update((c) => [...c, container].sort((a, b) => a.startSlot - b.startSlot));
 
   return container;
 }
 
 export async function updateContainer(
   id: string,
-  updates: Partial<Pick<Container, 'title' | 'description'>>
+  updates: Partial<Pick<Container, 'title'>>
 ): Promise<void> {
   const db = getDatabase();
   if (!db) throw new Error('Database not initialized');
@@ -118,10 +115,6 @@ export async function updateContainer(
   if (updates.title !== undefined) {
     sets.push('title = ?');
     params.push(updates.title);
-  }
-  if (updates.description !== undefined) {
-    sets.push('description = ?');
-    params.push(updates.description);
   }
 
   params.push(id);
@@ -158,11 +151,140 @@ export async function deleteContainer(id: string): Promise<void> {
 }
 
 // Node operations
-export async function addThread(
-  containerId: string,
+
+/**
+ * Create only the open node of a thread.
+ * Used for two-step node creation: first click creates open node,
+ * second click creates close node.
+ */
+export async function addOpenNode(
+  containerId: string | null,
   type: MiceType,
-  openPosition: number,
-  closePosition: number,
+  slot: number,
+  title: string = ''
+): Promise<StoryNode> {
+  const db = getDatabase();
+  if (!db) throw new Error('Database not initialized');
+
+  const threadId = generateId();
+  const timestamp = now();
+
+  const openNode: StoryNode = {
+    id: generateId(),
+    containerId,
+    threadId,
+    type,
+    role: 'open',
+    slot,
+    title,
+    description: '',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+
+  db.run(
+    `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      openNode.id,
+      openNode.containerId,
+      openNode.threadId,
+      openNode.type,
+      openNode.role,
+      openNode.slot,
+      openNode.title,
+      openNode.description,
+      openNode.createdAt,
+      openNode.updatedAt,
+    ]
+  );
+
+  await saveDatabase();
+  nodes.update((n) => [...n, openNode].sort((a, b) => a.slot - b.slot));
+
+  return openNode;
+}
+
+/**
+ * Complete a thread by adding the close node.
+ * Used for two-step node creation after the open node is already placed.
+ */
+export async function completeThread(
+  threadId: string,
+  slot: number,
+  title: string = ''
+): Promise<StoryNode> {
+  const db = getDatabase();
+  if (!db) throw new Error('Database not initialized');
+
+  // Get the open node to find its type and container
+  const openNodeResult = db.exec(
+    'SELECT container_id, type FROM nodes WHERE thread_id = ? AND role = ?',
+    [threadId, 'open']
+  );
+
+  if (!openNodeResult.length || !openNodeResult[0].values.length) {
+    throw new Error('Open node not found for thread');
+  }
+
+  const [containerId, type] = openNodeResult[0].values[0] as [string | null, MiceType];
+  const timestamp = now();
+
+  const closeNode: StoryNode = {
+    id: generateId(),
+    containerId,
+    threadId,
+    type,
+    role: 'close',
+    slot,
+    title,
+    description: '',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+
+  db.run(
+    `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      closeNode.id,
+      closeNode.containerId,
+      closeNode.threadId,
+      closeNode.type,
+      closeNode.role,
+      closeNode.slot,
+      closeNode.title,
+      closeNode.description,
+      closeNode.createdAt,
+      closeNode.updatedAt,
+    ]
+  );
+
+  await saveDatabase();
+  nodes.update((n) => [...n, closeNode].sort((a, b) => a.slot - b.slot));
+
+  return closeNode;
+}
+
+/**
+ * Delete a single node by ID.
+ * Used for canceling incomplete thread creation.
+ */
+export async function deleteNode(nodeId: string): Promise<void> {
+  const db = getDatabase();
+  if (!db) throw new Error('Database not initialized');
+
+  db.run('DELETE FROM nodes WHERE id = ?', [nodeId]);
+
+  await saveDatabase();
+  nodes.update((n) => n.filter((node) => node.id !== nodeId));
+}
+
+export async function addThread(
+  containerId: string | null,
+  type: MiceType,
+  openSlot: number,
+  closeSlot: number,
   openTitle: string = '',
   closeTitle: string = ''
 ): Promise<{ openNode: StoryNode; closeNode: StoryNode }> {
@@ -178,7 +300,7 @@ export async function addThread(
     threadId,
     type,
     role: 'open',
-    position: openPosition,
+    slot: openSlot,
     title: openTitle,
     description: '',
     createdAt: timestamp,
@@ -191,7 +313,7 @@ export async function addThread(
     threadId,
     type,
     role: 'close',
-    position: closePosition,
+    slot: closeSlot,
     title: closeTitle,
     description: '',
     createdAt: timestamp,
@@ -199,7 +321,7 @@ export async function addThread(
   };
 
   db.run(
-    `INSERT INTO nodes (id, container_id, thread_id, type, role, position, title, description, created_at, updated_at)
+    `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       openNode.id,
@@ -207,7 +329,7 @@ export async function addThread(
       openNode.threadId,
       openNode.type,
       openNode.role,
-      openNode.position,
+      openNode.slot,
       openNode.title,
       openNode.description,
       openNode.createdAt,
@@ -216,7 +338,7 @@ export async function addThread(
   );
 
   db.run(
-    `INSERT INTO nodes (id, container_id, thread_id, type, role, position, title, description, created_at, updated_at)
+    `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       closeNode.id,
@@ -224,7 +346,7 @@ export async function addThread(
       closeNode.threadId,
       closeNode.type,
       closeNode.role,
-      closeNode.position,
+      closeNode.slot,
       closeNode.title,
       closeNode.description,
       closeNode.createdAt,
@@ -233,7 +355,7 @@ export async function addThread(
   );
 
   await saveDatabase();
-  nodes.update((n) => [...n, openNode, closeNode].sort((a, b) => a.position - b.position));
+  nodes.update((n) => [...n, openNode, closeNode].sort((a, b) => a.slot - b.slot));
 
   return { openNode, closeNode };
 }
@@ -275,6 +397,258 @@ export async function deleteThread(threadId: string): Promise<void> {
 
   await saveDatabase();
   nodes.update((n) => n.filter((node) => node.threadId !== threadId));
+}
+
+/**
+ * Shift all slots at or after `fromSlot` by `delta` positions.
+ * This is used when inserting new content to make room.
+ */
+async function shiftSlots(fromSlot: number, delta: number): Promise<void> {
+  const db = getDatabase();
+  if (!db) throw new Error('Database not initialized');
+
+  // Shift node slots
+  db.run(
+    `UPDATE nodes SET slot = slot + ? WHERE slot >= ?`,
+    [delta, fromSlot]
+  );
+
+  // Shift container boundaries
+  // For start_slot: shift if >= fromSlot
+  // For end_slot: shift if >= fromSlot
+  db.run(
+    `UPDATE containers SET
+      start_slot = CASE WHEN start_slot >= ? THEN start_slot + ? ELSE start_slot END,
+      end_slot = CASE WHEN end_slot >= ? THEN end_slot + ? ELSE end_slot END
+    WHERE start_slot >= ? OR end_slot >= ?`,
+    [fromSlot, delta, fromSlot, delta, fromSlot, fromSlot]
+  );
+}
+
+/**
+ * Insert a new thread at a boundary position.
+ * The boundary represents the position BETWEEN existing slots.
+ * - boundary 0 = before all existing content (or at start of empty timeline)
+ * - boundary N = after slot N-1, before slot N
+ *
+ * This will:
+ * 1. Shift all existing slots >= boundary by 2 (to make room for open and close nodes)
+ * 2. Insert the open node at slot = boundary
+ * 3. Insert the close node at slot = boundary + 1
+ */
+export async function insertThreadAtBoundary(
+  boundary: number,
+  type: MiceType,
+  containerId: string | null = null,
+  openTitle: string = '',
+  closeTitle: string = ''
+): Promise<{ openNode: StoryNode; closeNode: StoryNode }> {
+  const db = getDatabase();
+  if (!db) throw new Error('Database not initialized');
+
+  // First, shift all existing slots to make room for the new thread
+  await shiftSlots(boundary, 2);
+
+  // Now insert the new thread at the boundary position
+  const threadId = generateId();
+  const timestamp = now();
+
+  const openNode: StoryNode = {
+    id: generateId(),
+    containerId,
+    threadId,
+    type,
+    role: 'open',
+    slot: boundary,
+    title: openTitle,
+    description: '',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+
+  const closeNode: StoryNode = {
+    id: generateId(),
+    containerId,
+    threadId,
+    type,
+    role: 'close',
+    slot: boundary + 1,
+    title: closeTitle,
+    description: '',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+
+  db.run(
+    `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      openNode.id,
+      openNode.containerId,
+      openNode.threadId,
+      openNode.type,
+      openNode.role,
+      openNode.slot,
+      openNode.title,
+      openNode.description,
+      openNode.createdAt,
+      openNode.updatedAt,
+    ]
+  );
+
+  db.run(
+    `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      closeNode.id,
+      closeNode.containerId,
+      closeNode.threadId,
+      closeNode.type,
+      closeNode.role,
+      closeNode.slot,
+      closeNode.title,
+      closeNode.description,
+      closeNode.createdAt,
+      closeNode.updatedAt,
+    ]
+  );
+
+  await saveDatabase();
+
+  // Reload from DB to get the shifted state
+  loadFromDb();
+
+  return { openNode, closeNode };
+}
+
+/**
+ * Insert ONLY an opening node at a boundary position.
+ *
+ * This is the first step of canonical two-step thread creation:
+ * 1) Insert open node at boundary (shifting content by 1 to make room)
+ * 2) Later, insert close node at a chosen boundary (shifting content by 1 again)
+ */
+export async function insertOpenNodeAtBoundary(
+  boundary: number,
+  type: MiceType,
+  containerId: string | null = null,
+  openTitle: string = ''
+): Promise<StoryNode> {
+  const db = getDatabase();
+  if (!db) throw new Error('Database not initialized');
+
+  await shiftSlots(boundary, 1);
+
+  const threadId = generateId();
+  const timestamp = now();
+
+  const openNode: StoryNode = {
+    id: generateId(),
+    containerId,
+    threadId,
+    type,
+    role: 'open',
+    slot: boundary,
+    title: openTitle,
+    description: '',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+
+  db.run(
+    `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      openNode.id,
+      openNode.containerId,
+      openNode.threadId,
+      openNode.type,
+      openNode.role,
+      openNode.slot,
+      openNode.title,
+      openNode.description,
+      openNode.createdAt,
+      openNode.updatedAt,
+    ]
+  );
+
+  await saveDatabase();
+  loadFromDb();
+
+  return openNode;
+}
+
+/**
+ * Insert the closing node for an existing thread at a boundary position.
+ *
+ * This is the second step of canonical two-step thread creation.
+ */
+export async function insertCloseNodeAtBoundary(
+  openNodeId: string,
+  boundary: number,
+  closeTitle: string = ''
+): Promise<StoryNode> {
+  const db = getDatabase();
+  if (!db) throw new Error('Database not initialized');
+
+  const openNodeResult = db.exec(
+    'SELECT container_id, thread_id, type, slot FROM nodes WHERE id = ? AND role = ?',
+    [openNodeId, 'open']
+  );
+
+  if (!openNodeResult.length || !openNodeResult[0].values.length) {
+    throw new Error('Open node not found');
+  }
+
+  const [containerId, threadId, type, openSlot] = openNodeResult[0].values[0] as [
+    string | null,
+    string,
+    MiceType,
+    number
+  ];
+
+  if (boundary <= openSlot) {
+    throw new Error('Close boundary must be after open node');
+  }
+
+  await shiftSlots(boundary, 1);
+
+  const timestamp = now();
+
+  const closeNode: StoryNode = {
+    id: generateId(),
+    containerId,
+    threadId,
+    type,
+    role: 'close',
+    slot: boundary,
+    title: closeTitle,
+    description: '',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+
+  db.run(
+    `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      closeNode.id,
+      closeNode.containerId,
+      closeNode.threadId,
+      closeNode.type,
+      closeNode.role,
+      closeNode.slot,
+      closeNode.title,
+      closeNode.description,
+      closeNode.createdAt,
+      closeNode.updatedAt,
+    ]
+  );
+
+  await saveDatabase();
+  loadFromDb();
+
+  return closeNode;
 }
 
 // Expose functions and stores for testing

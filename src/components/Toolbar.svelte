@@ -9,7 +9,7 @@
     }
 
     const data = db.export();
-    const blob = new Blob([data], { type: 'application/x-sqlite3' });
+    const blob = new Blob([new Uint8Array(data)], { type: 'application/x-sqlite3' });
     const url = URL.createObjectURL(blob);
 
     const a = document.createElement('a');

@@ -1,5 +1,6 @@
 import type { Container, StoryNode, MiceType } from '../lib/types';
 import type { InteractionState } from './interactions';
+import { getTotalSlots } from '../lib/slots';
 
 export interface RenderContext {
   canvas: HTMLCanvasElement;
@@ -52,6 +53,9 @@ export function render(context: RenderContext, state: RenderState): void {
   const width = rect.width;
   const height = rect.height;
 
+  // Calculate total slots for positioning
+  const totalSlots = getTotalSlots(state.containers, state.nodes);
+
   // Clear canvas
   ctx.fillStyle = COLORS.background;
   ctx.fillRect(0, 0, width, height);
@@ -79,14 +83,14 @@ export function render(context: RenderContext, state: RenderState): void {
   ctx.stroke();
 
   // Draw containers
-  drawContainers(ctx, state.containers, width, height);
+  drawContainers(ctx, state.containers, width, height, totalSlots);
 
   // Draw nodes and arcs
-  drawNodes(ctx, state.nodes, width, height);
+  drawNodes(ctx, state.nodes, width, height, totalSlots);
 
   // Draw interaction previews
   if (state.interaction) {
-    drawInteractionPreview(ctx, state.interaction, width, height);
+    drawInteractionPreview(ctx, state.interaction, width, height, totalSlots);
   }
 }
 
@@ -94,36 +98,44 @@ function drawInteractionPreview(
   ctx: CanvasRenderingContext2D,
   interaction: NonNullable<RenderState['interaction']>,
   canvasWidth: number,
-  canvasHeight: number
+  canvasHeight: number,
+  totalSlots: number
 ): void {
   const { state, mousePosition } = interaction;
 
   if (state.mode === 'creating-container' && mousePosition) {
-    drawContainerCreationPreview(ctx, state.startPosition, mousePosition, canvasWidth, canvasHeight);
+    drawContainerCreationPreview(ctx, state.startSlot, mousePosition, canvasWidth, canvasHeight, totalSlots);
   } else if (state.mode === 'creating-node' && mousePosition) {
-    drawNodeCreationPreview(ctx, state.type, state.openPosition, mousePosition, canvasWidth, canvasHeight);
+    drawNodeCreationPreview(ctx, state.type, state.openSlot, mousePosition, canvasWidth, canvasHeight, totalSlots);
   }
+}
+
+function slotToX(slot: number, canvasWidth: number, totalSlots: number): number {
+  if (totalSlots <= 1) return canvasWidth / 2;
+  const usableWidth = canvasWidth - LAYOUT.padding * 2;
+  const position = slot / (totalSlots - 1);
+  return LAYOUT.padding + usableWidth * position;
 }
 
 function drawNodeCreationPreview(
   ctx: CanvasRenderingContext2D,
   type: MiceType,
-  openPosition: number,
+  openSlot: number,
   mousePosition: { x: number; y: number },
   canvasWidth: number,
-  canvasHeight: number
+  canvasHeight: number,
+  totalSlots: number
 ): void {
   const trackY = canvasHeight * LAYOUT.trackLineY;
   const usableWidth = canvasWidth - LAYOUT.padding * 2;
   const color = COLORS.mice[type];
 
   // Calculate positions
-  const openX = LAYOUT.padding + usableWidth * openPosition;
+  const openX = slotToX(openSlot, canvasWidth, totalSlots);
   const openY = trackY - LAYOUT.nodeOffset;
 
-  // Calculate close position from mouse X
-  const closePosition = (mousePosition.x - LAYOUT.padding) / usableWidth;
-  const closeX = LAYOUT.padding + usableWidth * Math.max(0, Math.min(1, closePosition));
+  // Calculate close position from mouse X (approximate slot)
+  const closeX = mousePosition.x;
   const closeY = trackY + LAYOUT.nodeOffset;
 
   // Draw preview arc (dashed)
@@ -165,16 +177,16 @@ function drawNodeCreationPreview(
 
 function drawContainerCreationPreview(
   ctx: CanvasRenderingContext2D,
-  startPosition: number,
+  startSlot: number,
   mousePosition: { x: number; y: number },
   canvasWidth: number,
-  canvasHeight: number
+  canvasHeight: number,
+  totalSlots: number
 ): void {
   const containerZoneHeight = canvasHeight * LAYOUT.containerZoneHeight;
-  const usableWidth = canvasWidth - LAYOUT.padding * 2;
 
   // Calculate positions
-  const startX = LAYOUT.padding + usableWidth * startPosition;
+  const startX = slotToX(startSlot, canvasWidth, totalSlots);
   const endX = mousePosition.x;
 
   // Draw dashed preview rectangle
@@ -207,12 +219,12 @@ function drawContainers(
   ctx: CanvasRenderingContext2D,
   containers: Container[],
   canvasWidth: number,
-  canvasHeight: number
+  canvasHeight: number,
+  totalSlots: number
 ): void {
   if (containers.length === 0) return;
 
   const containerZoneHeight = canvasHeight * LAYOUT.containerZoneHeight;
-  const usableWidth = canvasWidth - LAYOUT.padding * 2;
 
   // Calculate depth for each container
   const depths = calculateContainerDepths(containers);
@@ -228,12 +240,10 @@ function drawContainers(
     const padding = depth * LAYOUT.containerPadding;
 
     // Calculate x positions
-    const x1 = LAYOUT.padding + usableWidth * container.startPosition + padding;
-    const x2 = LAYOUT.padding + usableWidth * container.endPosition - padding;
+    const x1 = slotToX(container.startSlot, canvasWidth, totalSlots) + padding;
+    const x2 = slotToX(container.endSlot, canvasWidth, totalSlots) - padding;
 
     // Calculate y positions (vertical space divided by depth levels)
-    const availableHeight = containerZoneHeight - 8; // 4px margin top and bottom
-    const heightPerLevel = maxDepth > 0 ? availableHeight / (maxDepth + 1) : availableHeight;
     const y1 = 4 + depth * LAYOUT.containerPadding;
     const y2 = containerZoneHeight - 4 - depth * LAYOUT.containerPadding;
 
@@ -310,12 +320,12 @@ function drawNodes(
   ctx: CanvasRenderingContext2D,
   nodes: StoryNode[],
   canvasWidth: number,
-  canvasHeight: number
+  canvasHeight: number,
+  totalSlots: number
 ): void {
   if (nodes.length === 0) return;
 
   const trackY = canvasHeight * LAYOUT.trackLineY;
-  const usableWidth = canvasWidth - LAYOUT.padding * 2;
 
   // Group nodes by thread to draw arcs
   const threadMap = new Map<string, StoryNode[]>();
@@ -331,24 +341,25 @@ function drawNodes(
       const openNode = threadNodes.find((n) => n.role === 'open');
       const closeNode = threadNodes.find((n) => n.role === 'close');
       if (openNode && closeNode) {
-        drawArc(ctx, openNode, closeNode, usableWidth, trackY);
+        drawArc(ctx, openNode, closeNode, canvasWidth, trackY, totalSlots);
       }
     }
   }
 
   // Draw nodes
   for (const node of nodes) {
-    drawNode(ctx, node, usableWidth, trackY);
+    drawNode(ctx, node, canvasWidth, trackY, totalSlots);
   }
 }
 
 function drawNode(
   ctx: CanvasRenderingContext2D,
   node: StoryNode,
-  usableWidth: number,
-  trackY: number
+  canvasWidth: number,
+  trackY: number,
+  totalSlots: number
 ): void {
-  const x = LAYOUT.padding + usableWidth * node.position;
+  const x = slotToX(node.slot, canvasWidth, totalSlots);
   // Open nodes above track, close nodes below
   const y = node.role === 'open' ? trackY - LAYOUT.nodeOffset : trackY + LAYOUT.nodeOffset;
 
@@ -370,11 +381,12 @@ function drawArc(
   ctx: CanvasRenderingContext2D,
   openNode: StoryNode,
   closeNode: StoryNode,
-  usableWidth: number,
-  trackY: number
+  canvasWidth: number,
+  trackY: number,
+  totalSlots: number
 ): void {
-  const x1 = LAYOUT.padding + usableWidth * openNode.position;
-  const x2 = LAYOUT.padding + usableWidth * closeNode.position;
+  const x1 = slotToX(openNode.slot, canvasWidth, totalSlots);
+  const x2 = slotToX(closeNode.slot, canvasWidth, totalSlots);
   const y1 = trackY - LAYOUT.nodeOffset;
   const y2 = trackY + LAYOUT.nodeOffset;
 

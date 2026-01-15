@@ -8,8 +8,11 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
-    "test": "playwright test",
-    "test:ui": "playwright test --ui"
+    "test": "sh -c 'npm run test:unit; unit=$?; npm run test:e2e; e2e=$?; [ $unit -eq 0 -a $e2e -eq 0 ]'",
+    "test:e2e": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest"
   },
   "devDependencies": {
     "@playwright/test": "^1.57.0",
@@ -19,7 +22,8 @@
     "svelte": "^5.43.8",
     "svelte-check": "^4.3.4",
     "typescript": "~5.9.3",
-    "vite": "^7.2.4"
+    "vite": "^7.2.4",
+    "vitest": "^4.0.17"
   },
   "dependencies": {
     "idb-keyval": "^6.2.2",

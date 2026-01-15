@@ -20,6 +20,7 @@
   }
 
   function handleClick(type: MiceType) {
+    console.log('[HoverGrid] Click on type:', type);
     onSelect(type);
   }
 </script>
@@ -27,7 +28,7 @@
 {#if visible}
   <div
     class="hover-grid"
-    data-testid="hover-grid"
+    data-testid="mice-grid"
     style="left: {x - 40}px; top: {y - 40}px;"
   >
     {#each types as type, i}

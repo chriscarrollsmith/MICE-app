@@ -5,20 +5,19 @@ export interface Container {
   id: string;
   parentId: string | null;
   title: string;
-  description: string;
-  startPosition: number;
-  endPosition: number;
+  startSlot: number;
+  endSlot: number;
   createdAt: string;
   updatedAt: string;
 }
 
 export interface StoryNode {
   id: string;
-  containerId: string;
+  containerId: string | null;
   threadId: string;
   type: MiceType;
   role: NodeRole;
-  position: number;
+  slot: number;
   title: string;
   description: string;
   createdAt: string;
