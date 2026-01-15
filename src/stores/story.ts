@@ -1,11 +1,68 @@
 import { writable, derived } from 'svelte/store';
 import type { Container, StoryNode, MiceType } from '../lib/types';
-import type { SqlValue } from 'sql.js';
+import type { Database, SqlValue } from 'sql.js';
 import { getDatabase, saveDatabase, generateId, now } from '../lib/db';
 
 // Writable stores
 export const containers = writable<Container[]>([]);
 export const nodes = writable<StoryNode[]>([]);
+
+const INSERT_NODE_SQL = `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+function snakeToCamel(col: string): string {
+  return col.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase());
+}
+
+function execResultToObjects<T>(result: { columns: string[]; values: SqlValue[][] }): T[] {
+  const camelCols = result.columns.map(snakeToCamel);
+  return result.values.map((row: SqlValue[]) => {
+    const obj: Record<string, SqlValue> = {};
+    camelCols.forEach((col: string, i: number) => {
+      obj[col] = row[i];
+    });
+    return obj as unknown as T;
+  });
+}
+
+function createStoryNode(args: {
+  containerId: string | null;
+  threadId: string;
+  type: MiceType;
+  role: 'open' | 'close';
+  slot: number;
+  title: string;
+  timestamp?: string;
+}): StoryNode {
+  const timestamp = args.timestamp ?? now();
+  return {
+    id: generateId(),
+    containerId: args.containerId,
+    threadId: args.threadId,
+    type: args.type,
+    role: args.role,
+    slot: args.slot,
+    title: args.title,
+    description: '',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function insertStoryNode(db: Database, node: StoryNode): void {
+  db.run(INSERT_NODE_SQL, [
+    node.id,
+    node.containerId,
+    node.threadId,
+    node.type,
+    node.role,
+    node.slot,
+    node.title,
+    node.description,
+    node.createdAt,
+    node.updatedAt,
+  ]);
+}
 
 // Derived store: group nodes by thread
 export const threads = derived(nodes, ($nodes) => {
@@ -26,17 +83,7 @@ export function loadFromDb(): void {
   // Load containers
   const containerResults = db.exec('SELECT * FROM containers ORDER BY start_slot');
   if (containerResults.length > 0) {
-    const cols = containerResults[0].columns;
-    const rows = containerResults[0].values;
-    const loadedContainers: Container[] = rows.map((row: SqlValue[]) => {
-      const obj: Record<string, SqlValue> = {};
-      cols.forEach((col: string, i: number) => {
-        // Convert snake_case to camelCase
-        const camelCol = col.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase());
-        obj[camelCol] = row[i];
-      });
-      return obj as unknown as Container;
-    });
+    const loadedContainers = execResultToObjects<Container>(containerResults[0]);
     containers.set(loadedContainers);
   } else {
     containers.set([]);
@@ -45,16 +92,7 @@ export function loadFromDb(): void {
   // Load nodes
   const nodeResults = db.exec('SELECT * FROM nodes ORDER BY slot');
   if (nodeResults.length > 0) {
-    const cols = nodeResults[0].columns;
-    const rows = nodeResults[0].values;
-    const loadedNodes: StoryNode[] = rows.map((row: SqlValue[]) => {
-      const obj: Record<string, SqlValue> = {};
-      cols.forEach((col: string, i: number) => {
-        const camelCol = col.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase());
-        obj[camelCol] = row[i];
-      });
-      return obj as unknown as StoryNode;
-    });
+    const loadedNodes = execResultToObjects<StoryNode>(nodeResults[0]);
     nodes.set(loadedNodes);
   } else {
     nodes.set([]);
@@ -176,19 +214,56 @@ export async function deleteContainer(id: string): Promise<void> {
   const db = getDatabase();
   if (!db) throw new Error('Database not initialized');
 
-  // Delete all nodes in this container
-  db.run('DELETE FROM nodes WHERE container_id = ?', [id]);
-
-  // Delete child containers recursively
-  const children = db.exec('SELECT id FROM containers WHERE parent_id = ?', [id]);
-  if (children.length > 0 && children[0].values.length > 0) {
-    for (const [childId] of children[0].values) {
-      await deleteContainer(childId as string);
+  // Collect the full container subtree (children first) so deletion is safe even if
+  // foreign key constraints are enforced on parent_id relationships.
+  const containerIds: string[] = [];
+  (function collectSubtree(containerId: string) {
+    const children = db.exec('SELECT id FROM containers WHERE parent_id = ?', [containerId]);
+    const childIds: string[] = children[0]?.values?.map((r: any[]) => r[0] as string) ?? [];
+    for (const childId of childIds) {
+      collectSubtree(childId);
     }
+    containerIds.push(containerId);
+  })(id);
+
+  const placeholders = containerIds.map(() => '?').join(', ');
+
+  // Record which slots will be removed so we can compact the timeline after deletion.
+  // Container boundaries occupy slots, just like nodes.
+  const removedSlots: number[] = [];
+
+  const boundaryRows = db.exec(
+    `SELECT start_slot, end_slot FROM containers WHERE id IN (${placeholders})`,
+    containerIds
+  );
+  for (const row of boundaryRows[0]?.values ?? []) {
+    removedSlots.push(row[0] as number, row[1] as number);
   }
 
-  // Delete the container
-  db.run('DELETE FROM containers WHERE id = ?', [id]);
+  const nodeSlotRows = db.exec(
+    `SELECT slot FROM nodes WHERE container_id IN (${placeholders}) ORDER BY slot`,
+    containerIds
+  );
+  for (const row of nodeSlotRows[0]?.values ?? []) {
+    removedSlots.push(row[0] as number);
+  }
+
+  // Delete all nodes in these containers.
+  db.run(`DELETE FROM nodes WHERE container_id IN (${placeholders})`, containerIds);
+
+  // Delete containers (children first).
+  for (const containerId of containerIds) {
+    db.run('DELETE FROM containers WHERE id = ?', [containerId]);
+  }
+
+  // Compact the timeline by removing the deleted slots.
+  // Each shift reduces subsequent slot indices by 1, so we adjust the fromSlot as we go.
+  const uniqueRemovedSlots = Array.from(new Set(removedSlots)).sort((a, b) => a - b);
+  let shiftsApplied = 0;
+  for (const slot of uniqueRemovedSlots) {
+    await shiftSlots(slot + 1 - shiftsApplied, -1);
+    shiftsApplied += 1;
+  }
 
   await saveDatabase();
   loadFromDb(); // Reload to get clean state
@@ -212,36 +287,17 @@ export async function addOpenNode(
 
   const threadId = generateId();
   const timestamp = now();
-
-  const openNode: StoryNode = {
-    id: generateId(),
+  const openNode = createStoryNode({
     containerId,
     threadId,
     type,
     role: 'open',
     slot,
     title,
-    description: '',
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
+    timestamp,
+  });
 
-  db.run(
-    `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      openNode.id,
-      openNode.containerId,
-      openNode.threadId,
-      openNode.type,
-      openNode.role,
-      openNode.slot,
-      openNode.title,
-      openNode.description,
-      openNode.createdAt,
-      openNode.updatedAt,
-    ]
-  );
+  insertStoryNode(db, openNode);
 
   await saveDatabase();
   nodes.update((n) => [...n, openNode].sort((a, b) => a.slot - b.slot));
@@ -274,35 +330,17 @@ export async function completeThread(
   const [containerId, type] = openNodeResult[0].values[0] as [string | null, MiceType];
   const timestamp = now();
 
-  const closeNode: StoryNode = {
-    id: generateId(),
+  const closeNode = createStoryNode({
     containerId,
     threadId,
     type,
     role: 'close',
     slot,
     title,
-    description: '',
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
+    timestamp,
+  });
 
-  db.run(
-    `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      closeNode.id,
-      closeNode.containerId,
-      closeNode.threadId,
-      closeNode.type,
-      closeNode.role,
-      closeNode.slot,
-      closeNode.title,
-      closeNode.description,
-      closeNode.createdAt,
-      closeNode.updatedAt,
-    ]
-  );
+  insertStoryNode(db, closeNode);
 
   await saveDatabase();
   nodes.update((n) => [...n, closeNode].sort((a, b) => a.slot - b.slot));
@@ -346,65 +384,28 @@ export async function addThread(
   const threadId = generateId();
   const timestamp = now();
 
-  const openNode: StoryNode = {
-    id: generateId(),
+  const openNode = createStoryNode({
     containerId,
     threadId,
     type,
     role: 'open',
     slot: openSlot,
     title: openTitle,
-    description: '',
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
+    timestamp,
+  });
 
-  const closeNode: StoryNode = {
-    id: generateId(),
+  const closeNode = createStoryNode({
     containerId,
     threadId,
     type,
     role: 'close',
     slot: closeSlot,
     title: closeTitle,
-    description: '',
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
+    timestamp,
+  });
 
-  db.run(
-    `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      openNode.id,
-      openNode.containerId,
-      openNode.threadId,
-      openNode.type,
-      openNode.role,
-      openNode.slot,
-      openNode.title,
-      openNode.description,
-      openNode.createdAt,
-      openNode.updatedAt,
-    ]
-  );
-
-  db.run(
-    `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      closeNode.id,
-      closeNode.containerId,
-      closeNode.threadId,
-      closeNode.type,
-      closeNode.role,
-      closeNode.slot,
-      closeNode.title,
-      closeNode.description,
-      closeNode.createdAt,
-      closeNode.updatedAt,
-    ]
-  );
+  insertStoryNode(db, openNode);
+  insertStoryNode(db, closeNode);
 
   await saveDatabase();
   nodes.update((n) => [...n, openNode, closeNode].sort((a, b) => a.slot - b.slot));
@@ -516,65 +517,28 @@ export async function insertThreadAtBoundary(
   const threadId = generateId();
   const timestamp = now();
 
-  const openNode: StoryNode = {
-    id: generateId(),
+  const openNode = createStoryNode({
     containerId,
     threadId,
     type,
     role: 'open',
     slot: boundary,
     title: openTitle,
-    description: '',
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
+    timestamp,
+  });
 
-  const closeNode: StoryNode = {
-    id: generateId(),
+  const closeNode = createStoryNode({
     containerId,
     threadId,
     type,
     role: 'close',
     slot: boundary + 1,
     title: closeTitle,
-    description: '',
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
+    timestamp,
+  });
 
-  db.run(
-    `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      openNode.id,
-      openNode.containerId,
-      openNode.threadId,
-      openNode.type,
-      openNode.role,
-      openNode.slot,
-      openNode.title,
-      openNode.description,
-      openNode.createdAt,
-      openNode.updatedAt,
-    ]
-  );
-
-  db.run(
-    `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      closeNode.id,
-      closeNode.containerId,
-      closeNode.threadId,
-      closeNode.type,
-      closeNode.role,
-      closeNode.slot,
-      closeNode.title,
-      closeNode.description,
-      closeNode.createdAt,
-      closeNode.updatedAt,
-    ]
-  );
+  insertStoryNode(db, openNode);
+  insertStoryNode(db, closeNode);
 
   await saveDatabase();
 
@@ -605,35 +569,17 @@ export async function insertOpenNodeAtBoundary(
   const threadId = generateId();
   const timestamp = now();
 
-  const openNode: StoryNode = {
-    id: generateId(),
+  const openNode = createStoryNode({
     containerId,
     threadId,
     type,
     role: 'open',
     slot: boundary,
     title: openTitle,
-    description: '',
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
+    timestamp,
+  });
 
-  db.run(
-    `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      openNode.id,
-      openNode.containerId,
-      openNode.threadId,
-      openNode.type,
-      openNode.role,
-      openNode.slot,
-      openNode.title,
-      openNode.description,
-      openNode.createdAt,
-      openNode.updatedAt,
-    ]
-  );
+  insertStoryNode(db, openNode);
 
   await saveDatabase();
   loadFromDb();
@@ -678,35 +624,17 @@ export async function insertCloseNodeAtBoundary(
 
   const timestamp = now();
 
-  const closeNode: StoryNode = {
-    id: generateId(),
+  const closeNode = createStoryNode({
     containerId,
     threadId,
     type,
     role: 'close',
     slot: boundary,
     title: closeTitle,
-    description: '',
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
+    timestamp,
+  });
 
-  db.run(
-    `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      closeNode.id,
-      closeNode.containerId,
-      closeNode.threadId,
-      closeNode.type,
-      closeNode.role,
-      closeNode.slot,
-      closeNode.title,
-      closeNode.description,
-      closeNode.createdAt,
-      closeNode.updatedAt,
-    ]
-  );
+  insertStoryNode(db, closeNode);
 
   await saveDatabase();
   loadFromDb();

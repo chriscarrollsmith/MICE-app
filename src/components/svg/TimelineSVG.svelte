@@ -42,7 +42,7 @@
   const config: LayoutConfig = {
     viewportWidth: 800,
     minItemWidth: 80,
-    rowHeight: 120,
+    rowHeight: 240,
     containerZoneHeight: 30,
     padding: 8,
   };
@@ -57,6 +57,9 @@
     | { mode: 'placing-container-end'; startSlot: number; parentId: string | null }
     | { mode: 'placing-node-close'; openNodeId: string; openSlot: number }
     | { mode: 'editing-node'; nodeId: string };
+
+  type PlacingContainerEnd = Extract<InteractionMode, { mode: 'placing-container-end' }>;
+  type PlacingNodeClose = Extract<InteractionMode, { mode: 'placing-node-close' }>;
 
   let interaction: InteractionMode = { mode: 'idle' };
   let selectedElement: { type: 'container' | 'node'; id: string } | null = null;
@@ -371,18 +374,32 @@
     ? boundaryPositions.find(b => b.boundary === hoveredBoundary)
     : null;
 
+  $: placingContainerEnd = interaction.mode === 'placing-container-end'
+    ? (interaction as PlacingContainerEnd)
+    : null;
+
+  $: placingNodeClose = interaction.mode === 'placing-node-close'
+    ? (interaction as PlacingNodeClose)
+    : null;
+
+  // Get the boundary position for the start boundary when creating a container
+  $: startBoundaryPosition =
+    placingContainerEnd
+      ? boundaryPositions.find((b) => b.boundary === placingContainerEnd.startSlot) ?? null
+      : null;
+
   // Two-step close placement preview (hover shows a semi-transparent close node + arc; click commits)
   $: openNodeForClosePreview =
-    interaction.mode === 'placing-node-close'
-      ? $nodes.find((n) => n.id === interaction.openNodeId) ?? null
+    placingNodeClose
+      ? $nodes.find((n) => n.id === placingNodeClose.openNodeId) ?? null
       : null;
 
   $: closePreviewVisible =
-    interaction.mode === 'placing-node-close' &&
+    placingNodeClose !== null &&
     hoveredZone === 'node' &&
     hoveredBoundary !== null &&
     currentBoundaryPosition !== null &&
-    hoveredBoundary > interaction.openSlot;
+    hoveredBoundary > placingNodeClose.openSlot;
 
   $: closePreview = closePreviewVisible && openNodeForClosePreview && currentBoundaryPosition
     ? {
@@ -392,7 +409,7 @@
         boundary: hoveredBoundary!,
         color: MICE_COLORS[openNodeForClosePreview.type],
         arcPath: (() => {
-          const openPos = layout.positions.get(interaction.openSlot);
+          const openPos = placingNodeClose ? layout.positions.get(placingNodeClose.openSlot) : null;
           if (!openPos) return null;
           const baseY = currentBoundaryPosition.row * config.rowHeight + config.rowHeight / 2;
           const startX = openPos.x;
@@ -437,6 +454,8 @@
     height={svgHeight}
     on:mousemove={handleMouseMove}
     on:mouseleave={handleMouseLeave}
+    role="application"
+    aria-label="Timeline"
     data-testid="timeline-svg"
   >
     <!-- Row backgrounds and track lines -->
@@ -559,20 +578,21 @@
 
     <!-- Preview during container creation -->
     <!-- Shows a preview rectangle spanning from start boundary to current hover position -->
-    {#if interaction.mode === 'placing-container-end' && hoveredBoundary !== null && currentBoundaryPosition}
-      {@const startPos = layout.positions.get(interaction.startSlot)}
-      {@const previewWidth = hoveredBoundary > interaction.startSlot
-        ? currentBoundaryPosition.x - (startPos?.x ?? 0)
-        : 0}
-      {#if startPos && previewWidth > 0}
+    {#if interaction.mode === 'placing-container-end' && hoveredBoundary !== null && currentBoundaryPosition && startBoundaryPosition}
+      {@const x1 = startBoundaryPosition.x}
+      {@const x2 = currentBoundaryPosition.x}
+      {@const previewX = Math.min(x1, x2)}
+      {@const previewWidth = Math.abs(x2 - x1)}
+      {#if previewWidth > 0}
         <rect
-          x={startPos.x}
-          y={startPos.row * config.rowHeight + 4}
+          x={previewX}
+          y={startBoundaryPosition.row * config.rowHeight + 4}
           width={previewWidth}
           height={config.containerZoneHeight - 8}
           fill="#9ca3af"
           opacity="0.3"
           rx="4"
+          data-testid="container-preview"
         />
       {/if}
     {/if}

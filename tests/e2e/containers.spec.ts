@@ -416,6 +416,63 @@ test.describe('story:create-container', () => {
     await setupFreshPage(page);
   });
 
+  test('P0-two-step-preview: shows end-boundary preview while placing container end', async ({ page }) => {
+    /* INTENT:BEGIN
+    Story: Create a container
+    Path: P0-two-step-preview
+    Steps:
+    - The timeline contains at least one row with multiple insertion boundaries.
+    - The user starts creating a container by choosing a start boundary.
+    - When the user hovers a different boundary, the UI shows a preview of the container span before committing.
+    INTENT:END */
+
+    // Seed slots so boundary 1 and 2 exist in the first row.
+    await page.evaluate(async () => {
+      const db = (window as any).__db;
+      db.run(`INSERT INTO containers (id, start_slot, end_slot, parent_id, title, created_at, updated_at)
+              VALUES ('c-seed', 0, 5, NULL, '', datetime('now'), datetime('now'))`);
+      await (window as any).__saveDb();
+      (window as any).__reloadStore();
+    });
+    await page.waitForTimeout(200);
+
+    const svg = page.locator('[data-testid="timeline-svg"]');
+    const box = await svg.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    // Hover near the left to pick an early boundary (typically boundary 1).
+    await page.mouse.move(box.x + box.width / 6, box.y + 15);
+    await page.waitForTimeout(150);
+
+    const startHandle = page.locator('[data-testid="container-handle"]');
+    await expect(startHandle).toBeVisible({ timeout: 2000 });
+    const startBoundaryAttr = await startHandle.getAttribute('data-boundary');
+    expect(startBoundaryAttr).toBeTruthy();
+    const startBoundary = Number(startBoundaryAttr);
+    expect(Number.isFinite(startBoundary)).toBe(true);
+
+    // Start container creation.
+    await startHandle.dispatchEvent('click');
+    await page.waitForTimeout(150);
+
+    // Hover further right to ensure we are on a different boundary (the "close boundary" preview position).
+    await page.mouse.move(box.x + box.width / 3, box.y + 15);
+    await page.waitForTimeout(150);
+
+    const endHandle = page.locator('[data-testid="container-handle"]');
+    await expect(endHandle).toBeVisible({ timeout: 2000 });
+    const endBoundaryAttr = await endHandle.getAttribute('data-boundary');
+    expect(endBoundaryAttr).toBeTruthy();
+    const endBoundary = Number(endBoundaryAttr);
+    expect(Number.isFinite(endBoundary)).toBe(true);
+    expect(endBoundary).not.toBe(startBoundary);
+
+    // Verify: preview span is visible before committing.
+    const preview = page.locator('[data-testid="container-preview"]');
+    await expect(preview).toBeVisible({ timeout: 2000 });
+  });
+
   /**
    * Clicking on a container handle starts container creation mode.
    * The user then clicks again to set the end boundary.

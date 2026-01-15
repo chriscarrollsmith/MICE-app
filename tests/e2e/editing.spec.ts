@@ -541,6 +541,147 @@ test.describe('story:container-deletion', () => {
     await setupFreshPage(page);
   });
 
+  test('P0-delete-container-restores-node-positions: deleting a container compacts the timeline and restores node positions', async ({ page }) => {
+    /* INTENT:BEGIN
+    Story: Container deletion compacts the timeline
+    Path: P0-delete-container-restores-node-positions
+    Steps:
+    - The user creates a thread.
+    - The user creates a container that shifts the thread’s nodes.
+    - The user deletes the container.
+    - The timeline compacts and the thread’s nodes return to their prior positions.
+    INTENT:END */
+
+    const svg = page.locator('[data-testid="timeline-svg"]');
+    const box = await svg.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    // Create a thread via the canonical two-step flow.
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    const miceGrid = page.locator('[data-testid="mice-grid"]');
+    await expect(miceGrid).toBeVisible({ timeout: 2000 });
+    await miceGrid.locator('[data-type="milieu"]').dispatchEvent('click');
+    await page.waitForTimeout(200);
+
+    await page.mouse.move(box.x + (box.width * 3) / 4, box.y + box.height / 2);
+    const closePreview = page.locator('[data-testid="close-node-preview"]');
+    await expect(closePreview).toBeVisible({ timeout: 2000 });
+    await closePreview.dispatchEvent('click');
+    await page.waitForTimeout(300);
+    await expect
+      .poll(async () => {
+        return await page.evaluate(() => {
+          const getState = (window as any).__timelineInteraction;
+          return getState ? getState()?.mode : null;
+        });
+      })
+      .toBe('idle');
+
+    // Capture thread identity + slots + initial X positions.
+    const thread = await page.evaluate(() => {
+      const db = (window as any).__db;
+      const rows = db.exec("SELECT id, thread_id, role, slot FROM nodes ORDER BY slot")[0]?.values ?? [];
+      const threadId = rows[0]?.[1];
+      const openRow = rows.find((r: any[]) => r[1] === threadId && r[2] === 'open');
+      const closeRow = rows.find((r: any[]) => r[1] === threadId && r[2] === 'close');
+      return {
+        threadId,
+        openId: openRow?.[0],
+        closeId: closeRow?.[0],
+        openSlot: openRow?.[3],
+        closeSlot: closeRow?.[3],
+      };
+    });
+    expect(thread.threadId).toBeTruthy();
+    expect(thread.openId).toBeTruthy();
+    expect(thread.closeId).toBeTruthy();
+
+    const openPos0 = await page.locator(`[data-node-id="${thread.openId}"]`).evaluate((el) => {
+      const m = (el as unknown as SVGGElement).getCTM();
+      return m ? { x: m.e, y: m.f } : null;
+    });
+    const closePos0 = await page.locator(`[data-node-id="${thread.closeId}"]`).evaluate((el) => {
+      const m = (el as unknown as SVGGElement).getCTM();
+      return m ? { x: m.e, y: m.f } : null;
+    });
+    expect(openPos0).not.toBeNull();
+    expect(closePos0).not.toBeNull();
+
+    // Create a container via the UI in a way that forces slot shifts.
+    // Hover in the container zone at the far left to select the first boundary.
+    await page.mouse.move(box.x + 2, box.y + 15);
+    await page.waitForTimeout(150);
+    const startHandle = page.locator('[data-testid="container-handle"]');
+    await expect(startHandle).toBeVisible({ timeout: 2000 });
+    await startHandle.dispatchEvent('click');
+    await page.waitForTimeout(150);
+
+    // Finish at the far right boundary.
+    await page.mouse.move(box.x + box.width - 2, box.y + 15);
+    await page.waitForTimeout(150);
+    const endHandle = page.locator('[data-testid="container-handle"]');
+    await expect(endHandle).toBeVisible({ timeout: 2000 });
+    await endHandle.dispatchEvent('click');
+    await page.waitForTimeout(350);
+
+    const createdContainerId = await page.evaluate(() => {
+      const db = (window as any).__db;
+      const res = db.exec('SELECT id FROM containers');
+      const ids = res[0]?.values?.map((r: any[]) => r[0]) ?? [];
+      return ids.length === 1 ? ids[0] : null;
+    });
+    expect(createdContainerId).toBeTruthy();
+
+    // Verify: the thread's slots changed (the container insertion made room at one or both boundaries).
+    const shiftedSlots = await page.evaluate((threadId: string) => {
+      const db = (window as any).__db;
+      const rows = db.exec("SELECT role, slot FROM nodes WHERE thread_id = ? ORDER BY slot", [threadId])[0]?.values ?? [];
+      const open = rows.find((r: any[]) => r[0] === 'open')?.[1];
+      const close = rows.find((r: any[]) => r[0] === 'close')?.[1];
+      return { open, close };
+    }, thread.threadId);
+    expect(shiftedSlots.open !== thread.openSlot || shiftedSlots.close !== thread.closeSlot).toBe(true);
+
+    // Capture shifted positions (used to ensure we actually return to the original coordinates later).
+    await page.locator(`[data-node-id="${thread.openId}"]`).evaluate((el) => (el as unknown as SVGGraphicsElement).getCTM());
+    await page.locator(`[data-node-id="${thread.closeId}"]`).evaluate((el) => (el as unknown as SVGGraphicsElement).getCTM());
+
+    // Delete the container via the UI.
+    const containerSegment = page.locator(`[data-container-id="${createdContainerId}"]`);
+    await expect(containerSegment).toBeVisible({ timeout: 10000 });
+    await containerSegment.hover();
+    await page.waitForTimeout(150);
+    const trashButton = containerSegment.locator('.trash-button');
+    await expect(trashButton).toBeVisible({ timeout: 2000 });
+    await trashButton.dispatchEvent('click');
+    await page.waitForTimeout(600);
+
+    // Assert: slots return to original.
+    const finalSlots = await page.evaluate((threadId: string) => {
+      const db = (window as any).__db;
+      const rows = db.exec("SELECT role, slot FROM nodes WHERE thread_id = ? ORDER BY slot", [threadId])[0]?.values ?? [];
+      const open = rows.find((r: any[]) => r[0] === 'open')?.[1];
+      const close = rows.find((r: any[]) => r[0] === 'close')?.[1];
+      return { open, close };
+    }, thread.threadId);
+    expect(finalSlots.open).toBe(thread.openSlot);
+    expect(finalSlots.close).toBe(thread.closeSlot);
+
+    // Assert: UI X positions return to the same values as before the container was created.
+    const openPos1 = await page.locator(`[data-node-id="${thread.openId}"]`).evaluate((el) => {
+      const m = (el as unknown as SVGGElement).getCTM();
+      return m ? { x: m.e, y: m.f } : null;
+    });
+    const closePos1 = await page.locator(`[data-node-id="${thread.closeId}"]`).evaluate((el) => {
+      const m = (el as unknown as SVGGElement).getCTM();
+      return m ? { x: m.e, y: m.f } : null;
+    });
+
+    expect(openPos1).toEqual(openPos0);
+    expect(closePos1).toEqual(closePos0);
+  });
+
   test('P0-delete-empty: can delete empty container via store function', async ({ page }) => {
     /* INTENT:BEGIN
     Story: Container deletion
@@ -572,6 +713,7 @@ test.describe('story:container-deletion', () => {
 
     // Delete container via store function
     await page.evaluate(async () => {
+      // @ts-ignore - Vite resolves this path at runtime
       const store = await import('/src/stores/story');
       await store.deleteContainer('c1');
     });
@@ -624,6 +766,7 @@ test.describe('story:container-deletion', () => {
 
     // Delete container via store function
     await page.evaluate(async () => {
+      // @ts-ignore - Vite resolves this path at runtime
       const store = await import('/src/stores/story');
       await store.deleteContainer('c1');
     });
