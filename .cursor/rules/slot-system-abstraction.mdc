@@ -1,0 +1,86 @@
+---
+alwaysApply: true
+---
+
+# Slot System Abstraction
+
+## Core Concepts
+
+### Slots (Integer Positions)
+- **Slots are integer positions**: 0, 1, 2, 3, ...
+- **Each node occupies exactly one slot**
+- **Each left-right container boundary occupies exactly one slot** (startSlot and endSlot are both slot positions)
+- **Slots are exclusive**: At most one occupant per slot (node or container boundary)
+- **Slots represent occupied positions** in the timeline
+
+### Insert Positions (Half-Steps)
+- **Insert positions are at half-steps**: 0.5, 1.5, 2.5, ...
+- **Insert position N.5** is between slot N and slot N+1
+- **Insert positions are where new content can be inserted**
+- **For n occupied slots** (slots 0 through n-1), valid insert positions are: 0.5, 1.5, ..., (n-0.5)
+
+### Virtual Slot Boundaries (Calculation Only)
+- **Slot -0.5** (left edge) and **slot n+0.5** (right edge) exist conceptually for calculating half-steps
+- These are NOT real slots and cannot be occupied
+- They only exist for the purpose of calculating insert positions at the edges
+
+## Examples
+
+### Empty Canvas (0 occupied slots)
+- **Occupied slots**: None
+- **Valid insert positions**: 0.5
+- **Visual representation**: Insert handle at center of canvas
+
+### Single Item (1 occupied slot)
+- **Occupied slots**: 0
+- **Valid insert positions**: 0.5 (before slot 0), 1.5 (after slot 0)
+- **Visual representation**: Item at slot 0, insert handles at 0.5 and 1.5
+
+### Multiple Items (n occupied slots)
+- **Occupied slots**: 0, 1, 2, ..., n-1
+- **Valid insert positions**: 0.5, 1.5, 2.5, ..., (n-0.5)
+- **Visual representation**: Items at slots 0..n-1, insert handles at half-steps between them
+
+## Constraints
+
+1. **One occupant per slot**: Never place more than one node or container boundary in the same slot
+2. **Slots are integers**: All slot indices must be non-negative integers
+3. **Insert positions are half-steps**: All valid insert positions are N.5 for some integer N
+4. **Rehydration required**: After any add/remove operation, slots must be renormalized to be contiguous starting from 0
+
+## Operations
+
+### Inserting at Insert Position N.5
+- Insert position N.5 means inserting between slot N and slot N+1
+- This creates a new slot at position N+1
+- All existing slots >= N+1 are shifted right by 1
+- The new content occupies slot N+1
+
+### Inserting at Insert Position 0.5 (Empty Canvas)
+- On empty canvas, insert position 0.5 means inserting at the start
+- This creates slot 0
+- The new content occupies slot 0
+
+### Deleting Slot N
+- Remove the occupant of slot N
+- All slots > N are shifted left by 1
+- Renormalize to ensure slots are contiguous starting from 0
+
+## Terminology for AI Agents
+
+When discussing slot operations with AI coding agents, use this language:
+
+- **"Slot N"** = integer position N where content can be placed
+- **"Insert position N.5"** = half-step position between slot N and slot N+1
+- **"Occupied slot"** = a slot that currently has a node or container boundary
+- **"Empty canvas"** = zero occupied slots, insert position 0.5 available
+- **"Renormalize slots"** = ensure slots are contiguous integers starting from 0
+- **"Shift slots right/left"** = increment/decrement slot indices to make room or close gaps
+
+## Implementation Notes
+
+- The current system uses insert position indices (0, 1, 2, ...) which map to insert positions (0.5, 1.5, 2.5, ...)
+- Insert position index N corresponds to insert position N.5
+- On empty canvas, insert position index 0 corresponds to insert position 0.5
+- After operations, always call `renormalizeSlots()` to ensure data model matches visual representation
+- Code uses variable names like `insertPositionIndex` for insert position indices to avoid confusion with container boundaries

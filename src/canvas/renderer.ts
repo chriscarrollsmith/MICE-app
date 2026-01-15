@@ -103,10 +103,10 @@ function drawInteractionPreview(
 ): void {
   const { state, mousePosition } = interaction;
 
-  if (state.mode === 'creating-container' && mousePosition) {
+  if (state.mode === 'placing-container-end' && mousePosition) {
     drawContainerCreationPreview(ctx, state.startSlot, mousePosition, canvasWidth, canvasHeight, totalSlots);
-  } else if (state.mode === 'creating-node' && mousePosition) {
-    drawNodeCreationPreview(ctx, state.type, state.openSlot, mousePosition, canvasWidth, canvasHeight, totalSlots);
+  } else if (state.mode === 'placing-node-close' && mousePosition) {
+    drawNodeCreationPreview(ctx, state.type, state.startSlot, mousePosition, canvasWidth, canvasHeight, totalSlots);
   }
 }
 

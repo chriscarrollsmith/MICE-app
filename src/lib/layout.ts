@@ -104,14 +104,16 @@ export function calculateLayout(totalSlots: number, config: LayoutConfig): Layou
 }
 
 /**
- * Get positions for insert handles (at slot boundaries)
+ * Get positions for insert handles at insert positions (half-steps).
+ * On empty canvas (0 occupied slots), returns insert position 0.5 at center.
+ * For n occupied slots, returns insert positions 0.5, 1.5, ..., (n-0.5).
  */
 export function getInsertHandlePositions(totalSlots: number, config: LayoutConfig): SlotPosition[] {
   const handles: SlotPosition[] = [];
   const itemsPerRow = Math.max(1, Math.floor(config.viewportWidth / config.minItemWidth));
 
   if (totalSlots === 0) {
-    // Single handle for empty timeline
+    // Empty canvas: single insert handle at insert position 0.5 (center)
     handles.push({
       slot: 0,
       row: 0,
@@ -158,9 +160,8 @@ export function getInsertHandlePositions(totalSlots: number, config: LayoutConfi
 /**
  * Calculate container segments for rendering (handles multi-row containers)
  *
- * Container borders are positioned at SLOT CENTER positions.
- * This means container boundaries occupy specific slots on the timeline,
- * just like nodes do.
+ * Container boundaries occupy slots (startSlot and endSlot), just like nodes.
+ * Each container boundary occupies exactly one slot, positioned at the slot's center.
  */
 export function calculateContainerSegments(
   container: Container,
@@ -328,34 +329,34 @@ export function calculateArcPath(
 }
 
 /**
- * Calculate boundary positions for insert handles.
- * Boundaries are the positions BETWEEN nodes where new content can be inserted.
- * - Boundary 0: before the first node
- * - Boundary N: after node at slot N-1, before node at slot N
- * - Boundary totalSlots: after the last node
+ * Calculate insert position positions for insert handles.
+ * Insert positions are at half-steps (0.5, 1.5, 2.5, ...) between occupied slots.
+ * - Insert position index 0 corresponds to insert position 0.5 (before slot 0, or at center on empty canvas)
+ * - Insert position index N corresponds to insert position N.5 (between slot N-1 and slot N)
+ * - Insert position index totalSlots corresponds to insert position (totalSlots-0.5) (after the last slot)
  *
- * Returns an array of {boundary, x, y, row} positions.
+ * Returns an array of {insertPositionIndex, x, y, row} positions where insertPositionIndex is the insert position index.
  */
 export function calculateBoundaryPositions(
   layout: LayoutResult,
   viewportWidth: number
-): { boundary: number; x: number; y: number; row: number }[] {
-  const boundaries: { boundary: number; x: number; y: number; row: number }[] = [];
+): { insertPositionIndex: number; x: number; y: number; row: number }[] {
+  const insertPositions: { insertPositionIndex: number; x: number; y: number; row: number }[] = [];
   const { positions, config, totalSlots, itemsPerRow } = layout;
 
   if (totalSlots === 0) {
-    // Empty timeline: single boundary at center
-    // Container creation on empty canvas is handled specially in TimelineSVG
-    boundaries.push({
-      boundary: 0,
+    // Empty canvas: single insert position 0.5 at center
+    // Insert position index 0 corresponds to insert position 0.5
+    insertPositions.push({
+      insertPositionIndex: 0,
       x: viewportWidth / 2,
       y: config.rowHeight / 2,
       row: 0,
     });
-    return boundaries;
+    return insertPositions;
   }
 
-  // For each row, calculate boundary positions
+  // For each row, calculate insert position positions
   const totalRows = Math.ceil(totalSlots / itemsPerRow);
 
   for (let row = 0; row < totalRows; row++) {
@@ -363,25 +364,25 @@ export function calculateBoundaryPositions(
     const lastSlotInRow = Math.min((row + 1) * itemsPerRow - 1, totalSlots - 1);
     const y = row * config.rowHeight + config.rowHeight / 2;
 
-    // Boundary before first slot in this row
+    // Insert position before first slot in this row
     const firstPos = positions.get(firstSlotInRow);
     if (firstPos) {
-      // Position boundary at left edge or between rows
-      boundaries.push({
-        boundary: firstSlotInRow,
+      // Position insert handle at left edge or between rows
+      insertPositions.push({
+        insertPositionIndex: firstSlotInRow,
         x: row === 0 ? firstPos.x / 2 : 0, // At start of timeline or left edge for continuation
         y,
         row,
       });
     }
 
-    // Boundaries between slots in this row
+    // Insert positions between slots in this row
     for (let slot = firstSlotInRow; slot < lastSlotInRow; slot++) {
       const currentPos = positions.get(slot);
       const nextPos = positions.get(slot + 1);
       if (currentPos && nextPos) {
-        boundaries.push({
-          boundary: slot + 1,
+        insertPositions.push({
+          insertPositionIndex: slot + 1,
           x: (currentPos.x + nextPos.x) / 2,
           y,
           row,
@@ -389,14 +390,14 @@ export function calculateBoundaryPositions(
       }
     }
 
-    // Boundary after last slot in this row
+    // Insert position after last slot in this row
     const lastPos = positions.get(lastSlotInRow);
     if (lastPos) {
-      // If this is the last row, put boundary after last node
-      // Otherwise, boundary at right edge continues to next row
+      // If this is the last row, put insert position after last node
+      // Otherwise, insert position at right edge continues to next row
       if (row === totalRows - 1) {
-        boundaries.push({
-          boundary: totalSlots,
+        insertPositions.push({
+          insertPositionIndex: totalSlots,
           x: lastPos.x + (viewportWidth - lastPos.x) / 2,
           y,
           row,
@@ -405,11 +406,12 @@ export function calculateBoundaryPositions(
     }
   }
 
-  return boundaries;
+  return insertPositions;
 }
 
 /**
- * Find the nearest boundary to a given X position within a row.
+ * Find the nearest insert position to a given X position within a row.
+ * Returns the insert position index N (where insert position is N.5).
  */
 export function getNearestBoundary(
   x: number,
@@ -417,26 +419,26 @@ export function getNearestBoundary(
   layout: LayoutResult,
   viewportWidth: number
 ): number {
-  const boundaries = calculateBoundaryPositions(layout, viewportWidth);
-  const rowBoundaries = boundaries.filter((b) => b.row === row);
+  const insertPositions = calculateBoundaryPositions(layout, viewportWidth);
+  const rowInsertPositions = insertPositions.filter((p) => p.row === row);
 
-  if (rowBoundaries.length === 0) {
+  if (rowInsertPositions.length === 0) {
     return 0;
   }
 
-  // Find the boundary with the closest x position
-  let nearest = rowBoundaries[0];
+  // Find the insert position with the closest x position
+  let nearest = rowInsertPositions[0];
   let minDist = Math.abs(x - nearest.x);
 
-  for (const b of rowBoundaries) {
-    const dist = Math.abs(x - b.x);
+  for (const p of rowInsertPositions) {
+    const dist = Math.abs(x - p.x);
     if (dist < minDist) {
       minDist = dist;
-      nearest = b;
+      nearest = p;
     }
   }
 
-  return nearest.boundary;
+  return nearest.insertPositionIndex;
 }
 
 /**
@@ -455,7 +457,8 @@ export function getSlotAtX(x: number, row: number, layout: LayoutResult): number
 }
 
 /**
- * Get the insert slot at a given X position (snaps to boundaries)
+ * Get the insert position index at a given X position (snaps to half-steps).
+ * Returns insert position index N, which corresponds to insert position N.5.
  */
 export function getInsertSlotAtX(x: number, row: number, layout: LayoutResult): number {
   const { itemsPerRow, totalSlots, config } = layout;
@@ -467,7 +470,7 @@ export function getInsertSlotAtX(x: number, row: number, layout: LayoutResult): 
   const slotsInRow = lastSlotInRow - firstSlotInRow + 1;
   const slotWidth = config.viewportWidth / slotsInRow;
 
-  // Round to nearest slot boundary
+  // Round to nearest insert position (half-step)
   const column = Math.round(x / slotWidth);
   return Math.min(firstSlotInRow + column, lastSlotInRow + 1);
 }

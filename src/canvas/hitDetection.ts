@@ -9,7 +9,7 @@ const LAYOUT = {
 
 export interface HitTestResult {
   zone: 'container' | 'node' | 'none';
-  slot: number; // Slot index (will be converted from position)
+  slot: number; // Occupied slot index (integer position where content can be placed)
   container?: Container;
   node?: StoryNode;
 }
@@ -30,7 +30,8 @@ export function isInNodeZone(y: number, canvasHeight: number): boolean {
 }
 
 /**
- * Convert an X coordinate to a slot index based on total slots
+ * Convert an X coordinate to an occupied slot index based on total occupied slots.
+ * On empty canvas (0 occupied slots), returns 0 as a fallback.
  */
 export function getSlotFromX(x: number, canvasWidth: number, totalSlots: number): number {
   if (totalSlots === 0) return 0;
@@ -72,7 +73,8 @@ export function positionToX(position: number, canvasWidth: number): number {
 }
 
 /**
- * Find the deepest container at a given slot
+ * Find the deepest container that contains the given occupied slot.
+ * Each container boundary occupies exactly one slot (startSlot and endSlot).
  */
 export function findContainerAtSlot(
   slot: number,

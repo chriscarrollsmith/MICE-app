@@ -5,14 +5,15 @@
   export let x: number;
   export let y: number;
   export let zone: 'container' | 'node';
-  export let boundary: number;
+  // insertPositionIndex is the insert position index N (where insert position is N.5)
+  export let insertPositionIndex: number;
   export let valid: boolean = true;
   export let nodeMode: 'start' | 'close' = 'start';
 
   const dispatch = createEventDispatcher<{
-    containerClick: { slot: number };
-    nodeClick: { boundary: number; type: MiceType };
-    nodeCloseClick: { boundary: number };
+    containerClick: { insertPositionIndex: number };
+    nodeClick: { insertPositionIndex: number; type: MiceType };
+    nodeCloseClick: { insertPositionIndex: number };
   }>();
 
   const MICE_TYPES: MiceType[] = ['milieu', 'idea', 'character', 'event'];
@@ -55,12 +56,12 @@
     transform="translate({x}, {y})"
     on:mouseenter={() => (hovered = true)}
     on:mouseleave={() => (hovered = false)}
-    on:click|stopPropagation={() => dispatch('containerClick', { slot: boundary })}
-    on:keydown={(e) => e.key === 'Enter' && dispatch('containerClick', { slot: boundary })}
+    on:click|stopPropagation={() => dispatch('containerClick', { insertPositionIndex })}
+    on:keydown={(e) => e.key === 'Enter' && dispatch('containerClick', { insertPositionIndex })}
     role="button"
     tabindex="0"
     data-testid="container-handle"
-    data-boundary={boundary}
+    data-insert-position-index={insertPositionIndex}
   >
     <rect
       x="-8"
@@ -81,12 +82,12 @@
       transform="translate({x}, {y})"
       on:mouseenter={() => (closeHovered = true)}
       on:mouseleave={() => (closeHovered = false)}
-      on:click|stopPropagation={() => dispatch('nodeCloseClick', { boundary })}
-      on:keydown={(e) => e.key === 'Enter' && dispatch('nodeCloseClick', { boundary })}
+      on:click|stopPropagation={() => dispatch('nodeCloseClick', { insertPositionIndex })}
+      on:keydown={(e) => e.key === 'Enter' && dispatch('nodeCloseClick', { insertPositionIndex })}
       role="button"
       tabindex="0"
       data-testid="close-node-handle"
-      data-boundary={boundary}
+      data-insert-position-index={insertPositionIndex}
     >
       <circle r="9" fill={closeHovered ? '#111827' : '#374151'} opacity={closeHovered ? 0.9 : 0.6} />
       <text
@@ -107,14 +108,14 @@
       class="node-handle mice-grid"
       transform="translate({x}, {y})"
       data-testid="mice-grid"
-      data-boundary={boundary}
+      data-insert-position-index={insertPositionIndex}
     >
       {#each MICE_TYPES as type, i}
         <g
           on:mouseenter={() => (hoveredType = type)}
           on:mouseleave={() => (hoveredType = null)}
-          on:click|stopPropagation={() => dispatch('nodeClick', { boundary, type })}
-          on:keydown={(e) => e.key === 'Enter' && dispatch('nodeClick', { boundary, type })}
+          on:click|stopPropagation={() => dispatch('nodeClick', { insertPositionIndex, type })}
+          on:keydown={(e) => e.key === 'Enter' && dispatch('nodeClick', { insertPositionIndex, type })}
           role="button"
           tabindex="0"
           data-type={type}

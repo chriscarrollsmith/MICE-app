@@ -441,36 +441,191 @@ test.describe('story:create-container', () => {
     expect(box).not.toBeNull();
     if (!box) return;
 
-    // Hover near the left to pick an early boundary (typically boundary 1).
+    // Hover near the left to pick an early insert position index (typically 1).
     await page.mouse.move(box.x + box.width / 6, box.y + 15);
     await page.waitForTimeout(150);
 
     const startHandle = page.locator('[data-testid="container-handle"]');
     await expect(startHandle).toBeVisible({ timeout: 2000 });
-    const startBoundaryAttr = await startHandle.getAttribute('data-boundary');
-    expect(startBoundaryAttr).toBeTruthy();
-    const startBoundary = Number(startBoundaryAttr);
-    expect(Number.isFinite(startBoundary)).toBe(true);
+    const startInsertPositionIndexAttr = await startHandle.getAttribute('data-insert-position-index');
+    expect(startInsertPositionIndexAttr).toBeTruthy();
+    const startInsertPositionIndex = Number(startInsertPositionIndexAttr);
+    expect(Number.isFinite(startInsertPositionIndex)).toBe(true);
 
     // Start container creation.
     await startHandle.dispatchEvent('click');
     await page.waitForTimeout(150);
 
-    // Hover further right to ensure we are on a different boundary (the "close boundary" preview position).
+    // Hover further right to ensure we are on a different insert position (the preview position).
     await page.mouse.move(box.x + box.width / 3, box.y + 15);
     await page.waitForTimeout(150);
 
     const endHandle = page.locator('[data-testid="container-handle"]');
     await expect(endHandle).toBeVisible({ timeout: 2000 });
-    const endBoundaryAttr = await endHandle.getAttribute('data-boundary');
-    expect(endBoundaryAttr).toBeTruthy();
-    const endBoundary = Number(endBoundaryAttr);
-    expect(Number.isFinite(endBoundary)).toBe(true);
-    expect(endBoundary).not.toBe(startBoundary);
+    const endInsertPositionIndexAttr = await endHandle.getAttribute('data-insert-position-index');
+    expect(endInsertPositionIndexAttr).toBeTruthy();
+    const endInsertPositionIndex = Number(endInsertPositionIndexAttr);
+    expect(Number.isFinite(endInsertPositionIndex)).toBe(true);
+    expect(endInsertPositionIndex).not.toBe(startInsertPositionIndex);
 
     // Verify: preview span is visible before committing.
     const preview = page.locator('[data-testid="container-preview"]');
     await expect(preview).toBeVisible({ timeout: 2000 });
+  });
+
+  test('P1-two-step-complete: two-step container insert with visible boundary and preview', async ({ page }) => {
+    /* INTENT:BEGIN
+    Story: Create a container
+    Path: P1-two-step-complete
+    Steps:
+    - The user hovers over the middle of the timeline in the upper zone (container zone) and sees a container creation handle.
+    - The user hovers over the handle and sees it darken to indicate it's interactable.
+    - The user clicks the handle to start container creation.
+    - After the first click, a visible vertical line appears at the start insert position, indicating where the container will begin.
+    - The UI transitions into a state that requires placing the end boundary.
+    - When the user moves the cursor to the right one half-step, a NEW container handle appears at that end position (not the original handle).
+    - A preview rectangle appears stretching from the start boundary to the hovered end position.
+    - The user clicks the new handle at the end position to complete container creation.
+    - The container is created and the UI returns to the idle interaction state.
+    INTENT:END */
+
+    const svg = page.locator('[data-testid="timeline-svg"]');
+    const box = await svg.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    // Step 1: Hover over middle of timeline in upper zone (container zone)
+    // Container zone is at the top, around y + 15
+    await page.mouse.move(box.x + box.width / 2, box.y + 15);
+    await page.waitForTimeout(150);
+
+    // Verify: Container handle appears
+    const startHandle = page.locator('[data-testid="container-handle"]');
+    await expect(startHandle).toBeVisible({ timeout: 2000 });
+
+    // Step 2: Hover over the handle itself - it should darken (visual feedback)
+    const handleBox = await startHandle.boundingBox();
+    expect(handleBox).not.toBeNull();
+    if (!handleBox) return;
+
+    await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+    await page.waitForTimeout(150);
+
+    // Verify handle is still visible and interactable
+    await expect(startHandle).toBeVisible();
+
+    // Get the start insert position index before clicking
+    const startInsertPositionIndexAttr = await startHandle.getAttribute('data-insert-position-index');
+    expect(startInsertPositionIndexAttr).toBeTruthy();
+    const startInsertPositionIndex = Number(startInsertPositionIndexAttr);
+    expect(Number.isFinite(startInsertPositionIndex)).toBe(true);
+
+    // Step 3: Click to start container creation
+    await startHandle.dispatchEvent('click');
+    await page.waitForTimeout(200);
+
+    // Verify: Interaction state is now placing-container-end
+    const state = await page.evaluate(() => {
+      const getState = (window as any).__timelineInteraction;
+      return getState ? getState() : null;
+    });
+    expect(state?.mode).toBe('placing-container-end');
+    expect(state?.startInsertPositionIndex).toBe(startInsertPositionIndex);
+
+    // Step 4: Verify a visible vertical boundary/line appears at the start insert position
+    // This should be a visual indicator showing where the container will begin
+    // Expected: A vertical line should appear at the start insert position
+    const startBoundaryIndicator = page.locator('[data-testid="container-start-boundary"]');
+    await expect(startBoundaryIndicator).toBeAttached({ timeout: 2000 });
+    
+    // Verify it's actually visible (has valid coordinates and is in viewport)
+    const isVisible = await startBoundaryIndicator.evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.width > 0 || rect.height > 0;
+    });
+    expect(isVisible).toBe(true);
+
+    // Step 5: Move cursor to the right one half-step (to a different insert position)
+    // On an empty canvas, moving right should find insert position index 1 (instead of 0)
+    // Move to a position that should be a different insert position index
+    await page.mouse.move(box.x + (box.width * 2) / 3, box.y + 15);
+    await page.waitForTimeout(150);
+
+    // Step 6: Verify a NEW container handle appears at the end position
+    // Expected: When hovering at a different insert position, a NEW handle should appear at that position
+    // ISSUE: Currently the original handle persists at the start position instead of showing a new one at the hover position
+    const endHandle = page.locator('[data-testid="container-handle"]');
+    await expect(endHandle).toBeVisible({ timeout: 2000 });
+
+    // Verify the end handle is at a different insert position than the start
+    // Expected: Handle should be at the current hover position (different from start)
+    // ISSUE: Currently fails because handle shows at same position (startInsertPositionIndex) instead of new position
+    const endInsertPositionIndexAttr = await endHandle.getAttribute('data-insert-position-index');
+    expect(endInsertPositionIndexAttr).toBeTruthy();
+    const endInsertPositionIndex = Number(endInsertPositionIndexAttr);
+    expect(Number.isFinite(endInsertPositionIndex)).toBe(true);
+    
+    // This assertion documents the bug: handle should be at a different position
+    // When in placing-container-end mode, the handle should only appear at insert positions different from start
+    if (endInsertPositionIndex === startInsertPositionIndex) {
+      throw new Error(
+        `BUG: Expected handle at different insert position, but both start and end are at index ${startInsertPositionIndex}. ` +
+        `The handle should appear at the current hover position (different from start), not persist at the start position. ` +
+        `When in placing-container-end mode, handles should only show at insert positions != startInsertPositionIndex.`
+      );
+    }
+    expect(endInsertPositionIndex).not.toBe(startInsertPositionIndex);
+
+    // Verify the original start handle is NOT visible at the start position anymore
+    // (The handle should only appear at the current hover position, not persist at start)
+    const allHandles = page.locator('[data-testid="container-handle"]');
+    const handleCount = await allHandles.count();
+    expect(handleCount).toBe(1); // Only one handle should be visible at a time
+
+    // Step 7: Verify preview rectangle appears stretching from start to end
+    const preview = page.locator('[data-testid="container-preview"]');
+    await expect(preview).toBeVisible({ timeout: 2000 });
+
+    // Verify preview has non-zero width (stretching from start to end)
+    const previewWidth = await preview.evaluate((el) => {
+      return parseFloat(el.getAttribute('width') || '0');
+    });
+    expect(previewWidth).toBeGreaterThan(0);
+
+    // Verify preview opacity indicates it's a preview (semi-transparent)
+    const previewOpacity = await preview.getAttribute('opacity');
+    expect(previewOpacity).toBeTruthy();
+    expect(parseFloat(previewOpacity || '1')).toBeLessThan(1);
+
+    // Step 8: Click the new handle at the end position to complete container creation
+    await endHandle.dispatchEvent('click');
+    await page.waitForTimeout(300);
+
+    // Verify: Container was created
+    const containerCount = await page.evaluate(() => {
+      const db = (window as any).__db;
+      const result = db.exec('SELECT COUNT(*) FROM containers');
+      return result[0]?.values[0]?.[0] ?? 0;
+    });
+    expect(containerCount).toBe(1); // New container created
+
+    // Verify: UI returned to idle state
+    const finalState = await page.evaluate(() => {
+      const getState = (window as any).__timelineInteraction;
+      return getState ? getState() : null;
+    });
+    expect(finalState?.mode).toBe('idle');
+
+    // Move mouse away to clear hover state
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(150);
+
+    // Verify: Preview is no longer visible after completion
+    await expect(preview).not.toBeVisible();
+
+    // Verify: Start boundary indicator is no longer visible after completion
+    const startBoundaryAfter = page.locator('[data-testid="container-start-boundary"]');
+    await expect(startBoundaryAfter).not.toBeVisible();
   });
 
   /**

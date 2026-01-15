@@ -6,7 +6,7 @@
   export let node: StoryNode;
   export let x: number;
   export let y: number;
-  export let radius: number = 18;
+  export let rowHeight: number = 120;
   export let selected: boolean = false;
 
   const dispatch = createEventDispatcher<{
@@ -29,9 +29,22 @@
   };
 
   let hovered = false;
-  $: currentRadius = hovered || selected ? radius * 1.15 : radius;
+  $: nodeSize = rowHeight * 0.65;
+  $: currentSize = hovered || selected ? nodeSize * 1.05 : nodeSize;
   $: color = MICE_COLORS[node.type];
-  $: label = MICE_LABELS[node.type];
+  $: typeLabel = MICE_LABELS[node.type];
+  $: displayText = node.title ? `${typeLabel}: ${node.title}` : typeLabel;
+  $: fontSize = Math.max(14, Math.floor(nodeSize / 12));
+  
+  // Truncate text to fit within node (with padding on each side)
+  // Approximate: each character is about 0.6 * fontSize wide for monospace-like text
+  // Leave 20px padding total (10px each side)
+  $: availableWidth = nodeSize - 20;
+  $: charWidth = fontSize * 0.6;
+  $: maxChars = Math.floor(availableWidth / charWidth);
+  $: truncatedText = displayText.length > maxChars 
+    ? displayText.substring(0, maxChars - 3) + '...' 
+    : displayText;
 </script>
 
 <g
@@ -47,12 +60,16 @@
   data-node-id={node.id}
   data-testid="node"
 >
-  <circle
-    r={currentRadius}
+  <rect
+    x={-currentSize / 2}
+    y={-currentSize / 2}
+    width={currentSize}
+    height={currentSize}
     fill={color}
     stroke={selected ? '#1f2937' : 'transparent'}
     stroke-width="2"
-    style="transition: r 150ms ease"
+    rx="4"
+    style="transition: width 150ms ease, height 150ms ease, x 150ms ease, y 150ms ease"
   />
   <text
     class="node-label"
@@ -60,16 +77,16 @@
     dominant-baseline="central"
     fill="white"
     font-weight="bold"
-    font-size="12"
+    font-size={fontSize}
     style="pointer-events: none"
   >
-    {label}
+    {truncatedText}
   </text>
 
   {#if hovered}
     <TrashButton
-      x={currentRadius * 0.7}
-      y={-currentRadius * 0.7}
+      x={currentSize / 2 - 10}
+      y={-currentSize / 2 + 10}
       size={14}
       on:click={() => dispatch('delete', { node })}
     />
@@ -85,7 +102,7 @@
     outline: none;
   }
 
-  .node:focus circle {
+  .node:focus rect {
     stroke: #3b82f6;
     stroke-width: 3;
   }

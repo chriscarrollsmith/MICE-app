@@ -4,7 +4,7 @@
     containers,
     nodes,
     addContainer,
-    addContainerAvoidingNodeOverlap,
+    addContainerAtInsertPositions,
     insertOpenNodeAtBoundary,
     insertCloseNodeAtBoundary,
     updateNode,
@@ -42,7 +42,7 @@
   const config: LayoutConfig = {
     viewportWidth: 800,
     minItemWidth: 80,
-    rowHeight: 240,
+    rowHeight: 120,
     containerZoneHeight: 30,
     padding: 8,
   };
@@ -54,12 +54,9 @@
   // Interaction state
   type InteractionMode =
     | { mode: 'idle' }
-    | { mode: 'placing-container-end'; startSlot: number; parentId: string | null }
+    | { mode: 'placing-container-end'; startInsertPositionIndex: number; parentId: string | null }
     | { mode: 'placing-node-close'; openNodeId: string; openSlot: number }
     | { mode: 'editing-node'; nodeId: string };
-
-  type PlacingContainerEnd = Extract<InteractionMode, { mode: 'placing-container-end' }>;
-  type PlacingNodeClose = Extract<InteractionMode, { mode: 'placing-node-close' }>;
 
   let interaction: InteractionMode = { mode: 'idle' };
   let selectedElement: { type: 'container' | 'node'; id: string } | null = null;
@@ -67,11 +64,39 @@
   // Mouse position for hover effects
   let mouseX = 0;
   let mouseY = 0;
-  let hoveredBoundary: number | null = null;
+  let hoveredInsertPositionIndex: number | null = null;
   let hoveredZone: 'container' | 'node' | null = null;
 
-  // Calculate boundary positions for the current layout
-  $: boundaryPositions = calculateBoundaryPositions(layout, viewportWidth);
+  // Calculate insert position positions for the current layout
+  $: insertPositionPositions = calculateBoundaryPositions(layout, viewportWidth);
+  
+  // When placing container end on empty canvas, add insert position index 1 if needed
+  $: enhancedInsertPositionPositions = (() => {
+    const positions = [...insertPositionPositions];
+    
+    // If placing container end on empty canvas and index 1 doesn't exist, add it
+    if (
+      interaction.mode === 'placing-container-end' &&
+      layout.totalSlots === 0 &&
+      interaction.startInsertPositionIndex === 0
+    ) {
+      const hasIndex1 = positions.some((p) => p.insertPositionIndex === 1);
+      if (!hasIndex1) {
+        const index0Pos = positions.find((p) => p.insertPositionIndex === 0);
+        if (index0Pos) {
+          // Place index 1 to the right of index 0 (at 3/4 of viewport width)
+          positions.push({
+            insertPositionIndex: 1,
+            x: viewportWidth * 0.75,
+            y: index0Pos.y,
+            row: index0Pos.row,
+          });
+        }
+      }
+    }
+    
+    return positions;
+  })();
 
   // Popover states
   let deleteConfirmContainer: Container | null = null;
@@ -132,65 +157,75 @@
     const maxRow = layout.totalRows > 0 ? layout.totalRows - 1 : 0;
 
     if (row >= 0 && row <= maxRow) {
-      hoveredBoundary = getNearestBoundary(mouseX, row, layout, viewportWidth);
+      let nearestIndex = getNearestBoundary(mouseX, row, layout, viewportWidth);
+      
+      // Special handling for container creation on empty canvas:
+      // When placing container end, if we're on empty canvas and mouse is to the right
+      // of the start position, allow placing at insert position index 1
+      if (
+        interaction.mode === 'placing-container-end' &&
+        layout.totalSlots === 0 &&
+        interaction.startInsertPositionIndex === 0
+      ) {
+        const startInsertPos = insertPositionPositions.find((p) => p.insertPositionIndex === 0);
+        if (startInsertPos && mouseX > startInsertPos.x) {
+          // Mouse is to the right of start position, use insert position index 1
+          nearestIndex = 1;
+        }
+      }
+      
+      hoveredInsertPositionIndex = nearestIndex;
     } else {
-      hoveredBoundary = null;
+      hoveredInsertPositionIndex = null;
     }
   }
 
   function handleMouseLeave() {
-    hoveredBoundary = null;
+    hoveredInsertPositionIndex = null;
     hoveredZone = null;
   }
 
-  function handleContainerHandleClick(e: CustomEvent<{ slot: number }>) {
-    const { slot } = e.detail;
+  async function handleContainerHandleClick(e: CustomEvent<{ insertPositionIndex: number }>) {
+    const { insertPositionIndex } = e.detail;
 
     if (interaction.mode === 'idle') {
       // Start container creation
-      const parentId = findContainerAtSlot(slot, $containers)?.id ?? null;
-      interaction = { mode: 'placing-container-end', startSlot: slot, parentId };
+      // Find parent container at the insert position (which will become slot N after insertion)
+      const parentId = findContainerAtSlot(insertPositionIndex, $containers)?.id ?? null;
+      interaction = { mode: 'placing-container-end', startInsertPositionIndex: insertPositionIndex, parentId };
     } else if (interaction.mode === 'placing-container-end') {
-      // Complete container creation
-      let endSlot = slot;
-
-      // On empty canvas (no slots exist), clicking creates a container spanning 0-1
-      // regardless of which boundary was clicked
-      if (totalSlots === 0) {
-        const startSlot = 0;
-        const defaultEndSlot = 1;
-        addContainer(startSlot, defaultEndSlot, interaction.parentId);
-      } else if (endSlot > interaction.startSlot) {
-        addContainerAvoidingNodeOverlap(interaction.startSlot, endSlot, interaction.parentId);
-      } else if (endSlot < interaction.startSlot) {
-        // Allow right-to-left container creation by swapping
-        addContainerAvoidingNodeOverlap(endSlot, interaction.startSlot, interaction.parentId);
-      }
+      // Complete container creation using insert position indices
+      const endInsertPositionIndex = insertPositionIndex;
+      await addContainerAtInsertPositions(
+        interaction.startInsertPositionIndex,
+        endInsertPositionIndex,
+        interaction.parentId
+      );
 
       interaction = { mode: 'idle' };
     }
   }
 
-  function handleNodeHandleClick(e: CustomEvent<{ boundary: number; type: MiceType }>) {
-    const { boundary, type } = e.detail;
+  function handleNodeHandleClick(e: CustomEvent<{ insertPositionIndex: number; type: MiceType }>) {
+    const { insertPositionIndex, type } = e.detail;
 
     if (interaction.mode === 'idle') {
       // Start canonical two-step thread creation:
-      // 1) Insert the opening node at this boundary
-      // 2) Enter close-placement mode until the user chooses a close boundary
-      const containerId = findContainerAtSlot(boundary, $containers)?.id ?? null;
-      insertOpenNodeAtBoundary(boundary, type, containerId).then((openNode) => {
+      // 1) Insert the opening node at insert position N.5
+      // 2) Enter close-placement mode until the user chooses a close insert position
+      const containerId = findContainerAtSlot(insertPositionIndex, $containers)?.id ?? null;
+      insertOpenNodeAtBoundary(insertPositionIndex, type, containerId).then((openNode) => {
         interaction = { mode: 'placing-node-close', openNodeId: openNode.id, openSlot: openNode.slot };
       });
     }
   }
 
-  function handleCloseNodeHandleClick(e: CustomEvent<{ boundary: number }>) {
-    const { boundary } = e.detail;
+  function handleCloseNodeHandleClick(e: CustomEvent<{ insertPositionIndex: number }>) {
+    const { insertPositionIndex } = e.detail;
     if (interaction.mode !== 'placing-node-close') return;
-    if (boundary <= interaction.openSlot) return;
+    if (insertPositionIndex <= interaction.openSlot) return;
 
-    insertCloseNodeAtBoundary(interaction.openNodeId, boundary).then(() => {
+    insertCloseNodeAtBoundary(interaction.openNodeId, insertPositionIndex).then(() => {
       interaction = { mode: 'idle' };
     }).catch(() => {
       interaction = { mode: 'idle' };
@@ -288,20 +323,6 @@
     }
   }
 
-  function handleClosePreviewClick() {
-    if (interaction.mode !== 'placing-node-close') return;
-    if (hoveredBoundary === null) return;
-    if (hoveredBoundary <= interaction.openSlot) return;
-
-    insertCloseNodeAtBoundary(interaction.openNodeId, hoveredBoundary)
-      .then(() => {
-        interaction = { mode: 'idle' };
-      })
-      .catch(() => {
-        interaction = { mode: 'idle' };
-      });
-  }
-
   // Check if mouse is directly over a node (within the node's visual bounds)
   // We don't show the insert handle when hovering directly on a node
   function isMouseOverNode(): boolean {
@@ -369,57 +390,60 @@
     });
   }
 
-  // Get the boundary position for the current hoveredBoundary
-  $: currentBoundaryPosition = hoveredBoundary !== null
-    ? boundaryPositions.find(b => b.boundary === hoveredBoundary)
+  // Get the insert position for the current hoveredInsertPositionIndex
+  $: currentInsertPosition = hoveredInsertPositionIndex !== null
+    ? enhancedInsertPositionPositions.find((p) => p.insertPositionIndex === hoveredInsertPositionIndex)
     : null;
 
-  $: placingContainerEnd = interaction.mode === 'placing-container-end'
-    ? (interaction as PlacingContainerEnd)
-    : null;
+  // Two-step close placement preview:
+  // - Hovering shows a semi-transparent close node + preview arc
+  // - Clicking commits the close node at the hovered insert position
+  function handleClosePreviewClick() {
+    if (interaction.mode !== 'placing-node-close') return;
+    if (hoveredInsertPositionIndex === null) return;
+    if (hoveredInsertPositionIndex <= interaction.openSlot) return;
 
-  $: placingNodeClose = interaction.mode === 'placing-node-close'
-    ? (interaction as PlacingNodeClose)
-    : null;
+    insertCloseNodeAtBoundary(interaction.openNodeId, hoveredInsertPositionIndex)
+      .then(() => {
+        interaction = { mode: 'idle' };
+      })
+      .catch(() => {
+        interaction = { mode: 'idle' };
+      });
+  }
 
-  // Get the boundary position for the start boundary when creating a container
-  $: startBoundaryPosition =
-    placingContainerEnd
-      ? boundaryPositions.find((b) => b.boundary === placingContainerEnd.startSlot) ?? null
-      : null;
+  $: placingNodeClose = interaction.mode === 'placing-node-close' ? interaction : null;
 
-  // Two-step close placement preview (hover shows a semi-transparent close node + arc; click commits)
   $: openNodeForClosePreview =
-    placingNodeClose
-      ? $nodes.find((n) => n.id === placingNodeClose.openNodeId) ?? null
-      : null;
+    placingNodeClose ? $nodes.find((n) => n.id === placingNodeClose.openNodeId) ?? null : null;
 
   $: closePreviewVisible =
     placingNodeClose !== null &&
     hoveredZone === 'node' &&
-    hoveredBoundary !== null &&
-    currentBoundaryPosition !== null &&
-    hoveredBoundary > placingNodeClose.openSlot;
+    hoveredInsertPositionIndex !== null &&
+    currentInsertPosition !== null &&
+    hoveredInsertPositionIndex > placingNodeClose.openSlot;
 
-  $: closePreview = closePreviewVisible && openNodeForClosePreview && currentBoundaryPosition
-    ? {
-        x: currentBoundaryPosition.x,
-        y: currentBoundaryPosition.row * config.rowHeight + config.rowHeight / 2,
-        row: currentBoundaryPosition.row,
-        boundary: hoveredBoundary!,
-        color: MICE_COLORS[openNodeForClosePreview.type],
-        arcPath: (() => {
-          const openPos = placingNodeClose ? layout.positions.get(placingNodeClose.openSlot) : null;
-          if (!openPos) return null;
-          const baseY = currentBoundaryPosition.row * config.rowHeight + config.rowHeight / 2;
-          const startX = openPos.x;
-          const endX = currentBoundaryPosition.x;
-          const midX = (startX + endX) / 2;
-          const controlY = baseY - config.rowHeight * 0.3;
-          return `M ${startX} ${baseY} Q ${midX} ${controlY} ${endX} ${baseY}`;
-        })(),
-      }
-    : null;
+  $: closePreview =
+    closePreviewVisible && openNodeForClosePreview && currentInsertPosition
+      ? {
+          x: currentInsertPosition.x,
+          y: currentInsertPosition.row * config.rowHeight + config.rowHeight / 2,
+          row: currentInsertPosition.row,
+          insertPositionIndex: hoveredInsertPositionIndex!,
+          color: MICE_COLORS[openNodeForClosePreview.type],
+          arcPath: (() => {
+            const openPos = placingNodeClose ? layout.positions.get(placingNodeClose.openSlot) : null;
+            if (!openPos) return null;
+            const baseY = currentInsertPosition.row * config.rowHeight + config.rowHeight / 2;
+            const startX = openPos.x;
+            const endX = currentInsertPosition.x;
+            const midX = (startX + endX) / 2;
+            const controlY = baseY - config.rowHeight * 0.3;
+            return `M ${startX} ${baseY} Q ${midX} ${controlY} ${endX} ${baseY}`;
+          })(),
+        }
+      : null;
 
   // Get editing node for popover
   $: editingNodeId = interaction.mode === 'editing-node' ? interaction.nodeId : null;
@@ -454,8 +478,6 @@
     height={svgHeight}
     on:mousemove={handleMouseMove}
     on:mouseleave={handleMouseLeave}
-    role="application"
-    aria-label="Timeline"
     data-testid="timeline-svg"
   >
     <!-- Row backgrounds and track lines -->
@@ -512,6 +534,7 @@
             {node}
             x={pos.x}
             y={pos.y}
+            rowHeight={config.rowHeight}
             selected={selectedElement?.type === 'node' && selectedElement.id === node.id}
             on:click={handleNodeClick}
             on:delete={handleNodeDelete}
@@ -521,26 +544,26 @@
     </g>
 
     <!-- Insert handle (shown on hover in idle mode, not over existing nodes or interactive container areas) -->
-    <!-- The handle appears at BOUNDARIES between nodes, not at slots -->
+    <!-- The handle appears at insert positions (half-steps between occupied slots), not at slots -->
     <!-- Hide when over nodes or container interactive areas (borders, title, trash button) -->
-    {#if hoveredBoundary !== null && hoveredZone !== null && currentBoundaryPosition && interaction.mode !== 'editing-node' && !isMouseOverNode() && !isMouseOverContainerInteractiveArea()}
-      {@const handleY = currentBoundaryPosition.row * config.rowHeight + (hoveredZone === 'container' ? config.containerZoneHeight / 2 : config.rowHeight / 2)}
-      {@const nodeMode = 'start'}
-      {@const nodeHandleValid = true}
+    {#if hoveredInsertPositionIndex !== null && hoveredZone !== null && currentInsertPosition && interaction.mode !== 'editing-node' && !isMouseOverNode() && !isMouseOverContainerInteractiveArea()}
+      {@const handleY = currentInsertPosition.row * config.rowHeight + (hoveredZone === 'container' ? config.containerZoneHeight / 2 : config.rowHeight / 2)}
+      {@const nodeMode = interaction.mode === 'placing-node-close' ? 'close' : 'start'}
+      {@const nodeHandleValid = interaction.mode === 'placing-node-close' ? (hoveredZone === 'node' && hoveredInsertPositionIndex > interaction.openSlot) : true}
       {@const containerHandleValid = interaction.mode === 'placing-container-end' ? (hoveredZone === 'container') : true}
       {@const shouldShowHandle =
         interaction.mode === 'placing-node-close'
-          ? false
+          ? (hoveredZone === 'node' && hoveredInsertPositionIndex > interaction.openSlot)
           : interaction.mode === 'placing-container-end'
-            ? (hoveredZone === 'container')
+            ? (hoveredZone === 'container' && hoveredInsertPositionIndex !== interaction.startInsertPositionIndex)
             : true}
 
       {#if shouldShowHandle}
         <InsertHandle
-          x={currentBoundaryPosition.x}
+          x={currentInsertPosition.x}
           y={handleY}
           zone={hoveredZone}
-          boundary={hoveredBoundary}
+          insertPositionIndex={hoveredInsertPositionIndex}
           valid={hoveredZone === 'container' ? containerHandleValid : nodeHandleValid}
           nodeMode={nodeMode}
           on:containerClick={handleContainerHandleClick}
@@ -576,17 +599,38 @@
       </g>
     {/if}
 
+    <!-- Start boundary indicator during container creation -->
+    <!-- Shows a vertical line at the start insert position after first click -->
+    {#if interaction.mode === 'placing-container-end'}
+      {@const placingContainer = interaction as Extract<InteractionMode, { mode: 'placing-container-end' }>}
+      {@const startInsertPos = enhancedInsertPositionPositions.find((p) => p.insertPositionIndex === placingContainer.startInsertPositionIndex)}
+      {#if startInsertPos}
+        <line
+          x1={startInsertPos.x}
+          y1={startInsertPos.row * config.rowHeight}
+          x2={startInsertPos.x}
+          y2={(startInsertPos.row + 1) * config.rowHeight}
+          stroke="#6b7280"
+          stroke-width="2"
+          stroke-dasharray="4 4"
+          opacity="0.6"
+          data-testid="container-start-boundary"
+        />
+      {/if}
+    {/if}
+
     <!-- Preview during container creation -->
-    <!-- Shows a preview rectangle spanning from start boundary to current hover position -->
-    {#if interaction.mode === 'placing-container-end' && hoveredBoundary !== null && currentBoundaryPosition && startBoundaryPosition}
-      {@const x1 = startBoundaryPosition.x}
-      {@const x2 = currentBoundaryPosition.x}
-      {@const previewX = Math.min(x1, x2)}
-      {@const previewWidth = Math.abs(x2 - x1)}
-      {#if previewWidth > 0}
+    <!-- Shows a preview rectangle spanning from start insert position to current hovered insert position -->
+    <!-- Only shows when hovering in the container zone -->
+    {#if interaction.mode === 'placing-container-end' && hoveredZone === 'container' && hoveredInsertPositionIndex !== null && currentInsertPosition}
+      {@const placingContainer = interaction as Extract<InteractionMode, { mode: 'placing-container-end' }>}
+      {@const startInsertPos = enhancedInsertPositionPositions.find((p) => p.insertPositionIndex === placingContainer.startInsertPositionIndex)}
+      {@const previewX = startInsertPos ? Math.min(startInsertPos.x, currentInsertPosition.x) : currentInsertPosition.x}
+      {@const previewWidth = startInsertPos ? Math.abs(currentInsertPosition.x - startInsertPos.x) : 0}
+      {#if startInsertPos && previewWidth > 0}
         <rect
           x={previewX}
-          y={startBoundaryPosition.row * config.rowHeight + 4}
+          y={startInsertPos.row * config.rowHeight + 4}
           width={previewWidth}
           height={config.containerZoneHeight - 8}
           fill="#9ca3af"

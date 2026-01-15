@@ -1,8 +1,9 @@
 import type { Container, StoryNode } from './types';
 
 /**
- * Find the innermost container that contains the given slot.
+ * Find the innermost container that contains the given occupied slot.
  * Returns null if the slot is not inside any container.
+ * Each container boundary occupies exactly one slot (startSlot and endSlot).
  */
 export function findContainerAtSlot(slot: number, containers: Container[]): Container | null {
   // Filter to containers that contain the slot
@@ -74,6 +75,8 @@ export function canCreateContainer(
 
 /**
  * Get all valid slot positions for placing a container's end boundary.
+ * The end boundary must occupy a slot that is after startSlot.
+ * Slots are exclusive: each slot can only have one occupant (node or container boundary).
  */
 export function getValidContainerEndSlots(
   startSlot: number,
@@ -141,8 +144,9 @@ export function canPlaceCloseNode(
 
 /**
  * Get all valid slot positions for placing a close node.
- * On an empty canvas (maxSlot = 0), we allow placing at openSlot + 1
- * since new slots will be created.
+ * On empty canvas (0 occupied slots), we allow placing at openSlot + 1
+ * since new slots will be created when inserting.
+ * Slots are exclusive: each slot can only have one occupant.
  */
 export function getValidCloseNodeSlots(
   openSlot: number,

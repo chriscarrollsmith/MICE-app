@@ -68,7 +68,7 @@ export class InteractionManager {
 
   handleClick(x: number, y: number): void {
     const totalSlots = this.getTotalSlots();
-    // Use at least 2 slots for position calculation so different click positions map to different slots
+    // Use at least 2 occupied slots for position calculation so different click positions map to different slots
     const slot = getSlotFromX(x, this.canvasWidth, Math.max(2, totalSlots));
     const containers = this.callbacks.getContainers();
 

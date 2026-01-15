@@ -2,7 +2,8 @@ import type { Container, StoryNode } from './types';
 
 /**
  * Get all occupied slot indices, sorted in ascending order.
- * Includes container start/end slots and node slots.
+ * Each node occupies exactly one slot, and each container boundary (startSlot/endSlot) occupies exactly one slot.
+ * Slots are exclusive: at most one occupant per slot.
  */
 export function getOccupiedSlots(containers: Container[], nodes: StoryNode[]): number[] {
   const slots = new Set<number>();
@@ -43,7 +44,8 @@ export function getTotalSlots(containers: Container[], nodes: StoryNode[]): numb
 }
 
 /**
- * Insert at a slot: increment all slots >= insertionPoint by 1.
+ * Insert at slot N: shift all slots >= N right by 1 to make room.
+ * This creates a new slot at position N, shifting existing content right.
  * Returns new arrays (does not mutate originals).
  */
 export function insertAtSlot(
@@ -89,8 +91,9 @@ export function deleteSlot(
 }
 
 /**
- * Renormalize slots to be contiguous starting from 0.
- * Preserves relative ordering.
+ * Renormalize slots to be contiguous integers starting from 0.
+ * Preserves relative ordering of occupied slots.
+ * After any add/remove operation, call this to ensure the data model matches the visual representation.
  * Returns new arrays (does not mutate originals).
  */
 export function renormalizeSlots(

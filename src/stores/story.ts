@@ -2,6 +2,7 @@ import { writable, derived } from 'svelte/store';
 import type { Container, StoryNode, MiceType } from '../lib/types';
 import type { Database, SqlValue } from 'sql.js';
 import { getDatabase, saveDatabase, generateId, now } from '../lib/db';
+import { getTotalSlots } from '../lib/slots';
 
 // Writable stores
 export const containers = writable<Container[]>([]);
@@ -140,9 +141,66 @@ export async function addContainer(
 }
 
 /**
- * Create a container while enforcing the constraint that container boundary slots
- * are not occupied by nodes. If a node currently occupies the start or end slot,
- * shift timeline slots to make room and keep the intended span.
+ * Create a container at insert positions (half-steps).
+ * Both start and end boundaries are inserted as new slots, ensuring they never collide with existing nodes.
+ * Insert position index N corresponds to insert position N.5, which creates a new slot at slot N.
+ *
+ * @param startInsertPositionIndex Insert position index for the start boundary
+ * @param endInsertPositionIndex Insert position index for the end boundary
+ * @param parentId Parent container ID, or null for top-level
+ * @param title Container title
+ */
+export async function addContainerAtInsertPositions(
+  startInsertPositionIndex: number,
+  endInsertPositionIndex: number,
+  parentId: string | null = null,
+  title: string = ''
+): Promise<Container> {
+  const db = getDatabase();
+  if (!db) throw new Error('Database not initialized');
+
+  // Normalize direction
+  const a = Math.min(startInsertPositionIndex, endInsertPositionIndex);
+  const b = Math.max(startInsertPositionIndex, endInsertPositionIndex);
+
+  // Get current total slots to check if canvas is empty
+  const currentContainers = db.exec('SELECT * FROM containers');
+  const currentNodes = db.exec('SELECT * FROM nodes');
+  const totalSlots = getTotalSlots(
+    currentContainers.length > 0 ? execResultToObjects<Container>(currentContainers[0]) : [],
+    currentNodes.length > 0 ? execResultToObjects<StoryNode>(currentNodes[0]) : []
+  );
+
+  let startSlot: number;
+  let endSlot: number;
+
+  if (totalSlots === 0) {
+    // Empty canvas: directly create container at slots 0-1
+    startSlot = 0;
+    endSlot = 1;
+  } else {
+    // Insert start boundary: shift slots >= a right by 1, then place boundary at slot a
+    await shiftSlots(a, 1);
+    startSlot = a;
+
+    // Insert end boundary: shift slots >= (b + 1) right by 1 (accounting for first insertion)
+    // Then place boundary at slot (b + 1)
+    await shiftSlots(b + 1, 1);
+    endSlot = b + 1;
+  }
+
+  // Create the container with the allocated boundary slots
+  const container = await addContainer(startSlot, endSlot, parentId, title);
+  // Rehydrate stores after slot shifts
+  loadFromDb();
+  return container;
+}
+
+/**
+ * Create a container while enforcing the constraint that slots are exclusive.
+ * Each container boundary occupies exactly one slot, and slots cannot be shared.
+ * If a node currently occupies the start or end slot, shift slots right to make room.
+ * @deprecated Use addContainerAtInsertPositions instead for proper insertion semantics
  */
 export async function addContainerAvoidingNodeOverlap(
   startSlot: number,
@@ -162,7 +220,7 @@ export async function addContainerAvoidingNodeOverlap(
 
   const hasNodeAt = (slot: number): boolean => {
     const res = db.exec('SELECT COUNT(*) FROM nodes WHERE slot = ?', [slot]);
-    return (res[0]?.values?.[0]?.[0] ?? 0) > 0;
+    return Number(res[0]?.values?.[0]?.[0] ?? 0) > 0;
   };
 
   // If start boundary collides with a node, shift everything at/after start right by 1.
@@ -228,8 +286,8 @@ export async function deleteContainer(id: string): Promise<void> {
 
   const placeholders = containerIds.map(() => '?').join(', ');
 
-  // Record which slots will be removed so we can compact the timeline after deletion.
-  // Container boundaries occupy slots, just like nodes.
+  // Record which occupied slots will be removed so we can compact the timeline after deletion.
+  // Each container boundary occupies exactly one slot (startSlot and endSlot), just like nodes.
   const removedSlots: number[] = [];
 
   const boundaryRows = db.exec(
@@ -256,8 +314,9 @@ export async function deleteContainer(id: string): Promise<void> {
     db.run('DELETE FROM containers WHERE id = ?', [containerId]);
   }
 
-  // Compact the timeline by removing the deleted slots.
+  // Compact the timeline by removing the deleted slots and shifting remaining slots left.
   // Each shift reduces subsequent slot indices by 1, so we adjust the fromSlot as we go.
+  // After deletion, slots should be renormalized to be contiguous starting from 0.
   const uniqueRemovedSlots = Array.from(new Set(removedSlots)).sort((a, b) => a - b);
   let shiftsApplied = 0;
   for (const slot of uniqueRemovedSlots) {
@@ -490,18 +549,20 @@ async function shiftSlots(fromSlot: number, delta: number): Promise<void> {
 }
 
 /**
- * Insert a new thread at a boundary position.
- * The boundary represents the position BETWEEN existing slots.
- * - boundary 0 = before all existing content (or at start of empty timeline)
- * - boundary N = after slot N-1, before slot N
+ * Insert a new thread at insert position N.5.
+ * Insert position N.5 is between slot N and slot N+1.
+ * - Insert position index 0 (insert position 0.5) = before slot 0, or at center on empty canvas
+ * - Insert position index N (insert position N.5) = between slot N-1 and slot N
  *
  * This will:
- * 1. Shift all existing slots >= boundary by 2 (to make room for open and close nodes)
- * 2. Insert the open node at slot = boundary
- * 3. Insert the close node at slot = boundary + 1
+ * 1. Shift all slots >= N right by 2 (to make room for open and close nodes)
+ * 2. Insert the open node at slot N
+ * 3. Insert the close node at slot N+1
+ *
+ * @param insertPositionIndex Insert position index N (where insert position is N.5)
  */
 export async function insertThreadAtBoundary(
-  boundary: number,
+  insertPositionIndex: number,
   type: MiceType,
   containerId: string | null = null,
   openTitle: string = '',
@@ -510,10 +571,10 @@ export async function insertThreadAtBoundary(
   const db = getDatabase();
   if (!db) throw new Error('Database not initialized');
 
-  // First, shift all existing slots to make room for the new thread
-  await shiftSlots(boundary, 2);
+  // First, shift all slots >= N right by 2 to make room for the new thread
+  await shiftSlots(insertPositionIndex, 2);
 
-  // Now insert the new thread at the boundary position
+  // Now insert the new thread at insert position N.5
   const threadId = generateId();
   const timestamp = now();
 
@@ -522,7 +583,7 @@ export async function insertThreadAtBoundary(
     threadId,
     type,
     role: 'open',
-    slot: boundary,
+    slot: insertPositionIndex,
     title: openTitle,
     timestamp,
   });
@@ -532,7 +593,7 @@ export async function insertThreadAtBoundary(
     threadId,
     type,
     role: 'close',
-    slot: boundary + 1,
+    slot: insertPositionIndex + 1,
     title: closeTitle,
     timestamp,
   });
@@ -549,14 +610,16 @@ export async function insertThreadAtBoundary(
 }
 
 /**
- * Insert ONLY an opening node at a boundary position.
+ * Insert ONLY an opening node at insert position N.5.
  *
  * This is the first step of canonical two-step thread creation:
- * 1) Insert open node at boundary (shifting content by 1 to make room)
- * 2) Later, insert close node at a chosen boundary (shifting content by 1 again)
+ * 1) Insert open node at insert position N.5 (shifts all slots >= N right by 1, places node at slot N)
+ * 2) Later, insert close node at a chosen insert position M.5 (shifts slots >= M right by 1, places node at slot M)
+ *
+ * @param insertPositionIndex Insert position index N (where insert position is N.5)
  */
 export async function insertOpenNodeAtBoundary(
-  boundary: number,
+  insertPositionIndex: number,
   type: MiceType,
   containerId: string | null = null,
   openTitle: string = ''
@@ -564,7 +627,7 @@ export async function insertOpenNodeAtBoundary(
   const db = getDatabase();
   if (!db) throw new Error('Database not initialized');
 
-  await shiftSlots(boundary, 1);
+  await shiftSlots(insertPositionIndex, 1);
 
   const threadId = generateId();
   const timestamp = now();
@@ -574,7 +637,7 @@ export async function insertOpenNodeAtBoundary(
     threadId,
     type,
     role: 'open',
-    slot: boundary,
+    slot: insertPositionIndex,
     title: openTitle,
     timestamp,
   });
@@ -588,13 +651,16 @@ export async function insertOpenNodeAtBoundary(
 }
 
 /**
- * Insert the closing node for an existing thread at a boundary position.
+ * Insert the closing node for an existing thread at insert position N.5.
  *
  * This is the second step of canonical two-step thread creation.
+ * Shifts all slots >= N right by 1 and places the close node at slot N.
+ *
+ * @param insertPositionIndex Insert position index N (where insert position is N.5)
  */
 export async function insertCloseNodeAtBoundary(
   openNodeId: string,
-  boundary: number,
+  insertPositionIndex: number,
   closeTitle: string = ''
 ): Promise<StoryNode> {
   const db = getDatabase();
@@ -616,11 +682,11 @@ export async function insertCloseNodeAtBoundary(
     number
   ];
 
-  if (boundary <= openSlot) {
-    throw new Error('Close boundary must be after open node');
+  if (insertPositionIndex <= openSlot) {
+    throw new Error('Close insert position must be after open node');
   }
 
-  await shiftSlots(boundary, 1);
+  await shiftSlots(insertPositionIndex, 1);
 
   const timestamp = now();
 
@@ -629,7 +695,7 @@ export async function insertCloseNodeAtBoundary(
     threadId,
     type,
     role: 'close',
-    slot: boundary,
+    slot: insertPositionIndex,
     title: closeTitle,
     timestamp,
   });
