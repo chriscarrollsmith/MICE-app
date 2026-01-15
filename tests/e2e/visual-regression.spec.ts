@@ -250,34 +250,35 @@ test.describe('story:visual-regression', () => {
     await page.evaluate(() => {
       const db = (window as any).__db;
 
-      // Create a container
+      // Create a container whose boundaries occupy their own slots.
+      // Slot occupancy must be exclusive: container boundaries and nodes cannot share a slot.
       db.run(`
         INSERT INTO containers (id, start_slot, end_slot, parent_id, title, created_at, updated_at)
-        VALUES ('c1', 0, 5, NULL, '', datetime('now'), datetime('now'))
+        VALUES ('c1', 0, 7, NULL, '', datetime('now'), datetime('now'))
       `);
 
-      // Create first thread (character type) at slots 0-1
+      // Create first thread (character type) at slots 1-2
       db.run(`
         INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
         VALUES
-          ('n1', 'c1', 't1', 'character', 'open', 0, 'Open Character', '', datetime('now'), datetime('now')),
-          ('n2', 'c1', 't1', 'character', 'close', 1, 'Close Character', '', datetime('now'), datetime('now'))
+          ('n1', 'c1', 't1', 'character', 'open', 1, 'Open Character', '', datetime('now'), datetime('now')),
+          ('n2', 'c1', 't1', 'character', 'close', 2, 'Close Character', '', datetime('now'), datetime('now'))
       `);
 
-      // Create second thread (idea type) at slots 2-3
+      // Create second thread (idea type) at slots 3-4
       db.run(`
         INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
         VALUES
-          ('n3', 'c1', 't2', 'idea', 'open', 2, 'Open Idea', '', datetime('now'), datetime('now')),
-          ('n4', 'c1', 't2', 'idea', 'close', 3, 'Close Idea', '', datetime('now'), datetime('now'))
+          ('n3', 'c1', 't2', 'idea', 'open', 3, 'Open Idea', '', datetime('now'), datetime('now')),
+          ('n4', 'c1', 't2', 'idea', 'close', 4, 'Close Idea', '', datetime('now'), datetime('now'))
       `);
 
-      // Create third thread (event type) at slots 4-5
+      // Create third thread (event type) at slots 5-6
       db.run(`
         INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
         VALUES
-          ('n5', 'c1', 't3', 'event', 'open', 4, 'Open Event', '', datetime('now'), datetime('now')),
-          ('n6', 'c1', 't3', 'event', 'close', 5, 'Close Event', '', datetime('now'), datetime('now'))
+          ('n5', 'c1', 't3', 'event', 'open', 5, 'Open Event', '', datetime('now'), datetime('now')),
+          ('n6', 'c1', 't3', 'event', 'close', 6, 'Close Event', '', datetime('now'), datetime('now'))
       `);
 
       // Save and reload

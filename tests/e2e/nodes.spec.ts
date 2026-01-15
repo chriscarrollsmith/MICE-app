@@ -6,7 +6,7 @@ import { setupFreshPage } from './helpers';
  *
  * These tests verify that nodes render correctly on the timeline.
  * Nodes are the core visual elements representing story beats in the MICE framework.
- * Each node is displayed as a colored circle with a letter label (M, I, C, or E).
+ * Each node is displayed as a colored square with a letter label (M, I, C, or E).
  */
 test.describe('story:node-rendering', () => {
   test.beforeEach(async ({ page }) => {
@@ -14,17 +14,17 @@ test.describe('story:node-rendering', () => {
   });
 
   /**
-   * Nodes should render as colored circles on the timeline.
-   * Each node displays as an SVG circle element with a fill color
+   * Nodes should render as colored squares on the timeline.
+   * Each node displays as an SVG rect element with a fill color
    * corresponding to its MICE type.
    */
-  test('P0-colored-circles: nodes render as colored circles on timeline', async ({ page }) => {
+  test('P0-colored-squares: nodes render as colored squares on timeline', async ({ page }) => {
     /* INTENT:BEGIN
     Story: Node rendering
-    Path: P0-colored-circles
+    Path: P0-colored-squares
     Steps:
     - The timeline contains nodes.
-    - Nodes render as visible circles on the timeline.
+    - Nodes render as visible squares on the timeline.
     INTENT:END */
 
     // Set up: Create a container with a pair of nodes (open and close)
@@ -46,12 +46,12 @@ test.describe('story:node-rendering', () => {
     const nodes = page.locator('[data-testid="node"]');
     await expect(nodes).toHaveCount(2);
 
-    // Verify: Each node contains an SVG circle with a fill color
+    // Verify: Each node contains an SVG rect with a fill color
     const firstNode = nodes.first();
-    const circle = firstNode.locator('circle');
-    await expect(circle).toBeAttached();
+    const rect = firstNode.locator('rect');
+    await expect(rect).toBeAttached();
 
-    const fill = await circle.getAttribute('fill');
+    const fill = await rect.getAttribute('fill');
     expect(fill).toBeTruthy();
   });
 
@@ -111,9 +111,9 @@ test.describe('story:node-rendering', () => {
       const nodes = document.querySelectorAll('[data-testid="node"]');
       const colorMap: Record<string, string> = {};
       nodes.forEach((node) => {
-        const circle = node.querySelector('circle');
-        if (circle) {
-          const fill = circle.getAttribute('fill') || '';
+        const rect = node.querySelector('rect');
+        if (rect) {
+          const fill = rect.getAttribute('fill') || '';
           const text = node.querySelector('text');
           const label = text?.textContent || '';
           if (label && !colorMap[label]) {

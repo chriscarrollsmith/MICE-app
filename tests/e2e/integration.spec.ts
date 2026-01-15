@@ -210,6 +210,35 @@ test.describe('story:ui-shell', () => {
     await expect(exportBtn).toBeVisible();
   });
 
+  test('P0a-mice-legend: app displays a legend explaining MICE node types', async ({ page }) => {
+    /* INTENT:BEGIN
+    Story: UI shell
+    Path: P0a-mice-legend
+    Steps:
+    - The user opens the app.
+    - A legend is visible explaining the meaning of M, I, C, and E.
+    INTENT:END */
+
+    await page.goto('/');
+
+    const legend = page.locator('[data-testid="mice-legend"]');
+    await expect(legend).toBeVisible();
+
+    await expect(legend.locator('[data-testid="mice-legend-title"]')).toHaveText('The Four Elements of MICE');
+
+    await expect(legend.locator('[data-testid="mice-legend-item-m"]')).toContainText('Milieu');
+    await expect(legend.locator('[data-testid="mice-legend-item-m"]')).toContainText('M');
+
+    await expect(legend.locator('[data-testid="mice-legend-item-i"]')).toContainText('Inquiry');
+    await expect(legend.locator('[data-testid="mice-legend-item-i"]')).toContainText('I');
+
+    await expect(legend.locator('[data-testid="mice-legend-item-c"]')).toContainText('Character');
+    await expect(legend.locator('[data-testid="mice-legend-item-c"]')).toContainText('C');
+
+    await expect(legend.locator('[data-testid="mice-legend-item-e"]')).toContainText('Event');
+    await expect(legend.locator('[data-testid="mice-legend-item-e"]')).toContainText('E');
+  });
+
   test('P1-timeline-structure: timeline container renders with correct structure', async ({ page }) => {
     /* INTENT:BEGIN
     Story: UI shell
