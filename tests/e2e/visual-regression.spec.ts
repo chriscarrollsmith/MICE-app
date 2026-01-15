@@ -112,6 +112,7 @@ test.describe('story:visual-regression', () => {
       const characterCell = page.locator('[data-testid="mice-grid"] [data-type="character"]');
       await expect(characterCell).toBeVisible({ timeout: 2000 });
       await characterCell.dispatchEvent('click');
+      await page.waitForTimeout(200);
 
       // Complete two-step creation by clicking the close-node preview
       await page.mouse.move(box.x + (box.width * 3) / 4, box.y + box.height / 2);
@@ -161,6 +162,7 @@ test.describe('story:visual-regression', () => {
       const characterCell = page.locator('[data-testid="mice-grid"] [data-type="character"]');
       await expect(characterCell).toBeVisible({ timeout: 2000 });
       await characterCell.dispatchEvent('click');
+      await page.waitForTimeout(200);
 
       // Complete two-step creation by clicking the close-node preview
       await page.mouse.move(box.x + (box.width * 3) / 4, box.y + box.height / 2);
@@ -209,6 +211,7 @@ test.describe('story:visual-regression', () => {
       const characterCell = page.locator('[data-testid="mice-grid"] [data-type="character"]');
       await expect(characterCell).toBeVisible({ timeout: 2000 });
       await characterCell.dispatchEvent('click');
+      await page.waitForTimeout(200);
 
       // Complete two-step creation by clicking the close-node preview
       await page.mouse.move(box.x + (box.width * 3) / 4, box.y + box.height / 2);

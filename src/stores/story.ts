@@ -318,10 +318,18 @@ export async function deleteNode(nodeId: string): Promise<void> {
   const db = getDatabase();
   if (!db) throw new Error('Database not initialized');
 
+  const slotResult = db.exec('SELECT slot FROM nodes WHERE id = ?', [nodeId]);
+  const slot = slotResult[0]?.values?.[0]?.[0] as number | undefined;
+
   db.run('DELETE FROM nodes WHERE id = ?', [nodeId]);
 
+  // Compact the timeline so no empty slot is left behind.
+  if (slot !== undefined) {
+    await shiftSlots(slot + 1, -1);
+  }
+
   await saveDatabase();
-  nodes.update((n) => n.filter((node) => node.id !== nodeId));
+  loadFromDb();
 }
 
 export async function addThread(
@@ -437,10 +445,21 @@ export async function deleteThread(threadId: string): Promise<void> {
   const db = getDatabase();
   if (!db) throw new Error('Database not initialized');
 
+  const slotsResult = db.exec('SELECT slot FROM nodes WHERE thread_id = ? ORDER BY slot', [threadId]);
+  const removedSlots: number[] = slotsResult[0]?.values?.map((r: any[]) => r[0] as number) ?? [];
+
   db.run('DELETE FROM nodes WHERE thread_id = ?', [threadId]);
 
+  // Compact the timeline by removing the deleted slots.
+  // Each shift reduces subsequent slot indices by 1, so we adjust the fromSlot as we go.
+  let shiftsApplied = 0;
+  for (const slot of removedSlots) {
+    await shiftSlots(slot + 1 - shiftsApplied, -1);
+    shiftsApplied += 1;
+  }
+
   await saveDatabase();
-  nodes.update((n) => n.filter((node) => node.threadId !== threadId));
+  loadFromDb();
 }
 
 /**

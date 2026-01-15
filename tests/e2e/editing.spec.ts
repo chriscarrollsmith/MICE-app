@@ -346,6 +346,196 @@ test.describe('story:thread-deletion', () => {
   });
 });
 
+test.describe('story:thread-deletion-compacts-timeline', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupFreshPage(page);
+  });
+
+  test('P0-delete-inner-restores-outer-positions: deleting an inner thread restores outer node positions', async ({ page }) => {
+    /* INTENT:BEGIN
+    Story: Thread deletion compacts the timeline
+    Path: P0-delete-inner-restores-outer-positions
+    Steps:
+    - The user creates a thread.
+    - The user inserts a second thread between the first thread’s opening and closing nodes.
+    - The first thread’s nodes shift to accommodate the inserted thread.
+    - The user deletes the inserted thread.
+    - The timeline compacts and the remaining nodes return to their prior positions.
+    INTENT:END */
+
+    const svg = page.locator('[data-testid="timeline-svg"]');
+    const box = await svg.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+
+    // Create outer thread (two-step)
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    const miceGrid = page.locator('[data-testid="mice-grid"]');
+    await expect(miceGrid).toBeVisible({ timeout: 2000 });
+    await miceGrid.locator('[data-type="milieu"]').dispatchEvent('click');
+    await page.waitForTimeout(200);
+
+    await page.mouse.move(box.x + (box.width * 3) / 4, box.y + box.height / 2);
+    const closePreview = page.locator('[data-testid="close-node-preview"]');
+    await expect(closePreview).toBeVisible({ timeout: 2000 });
+    await closePreview.dispatchEvent('click');
+    await page.waitForTimeout(300);
+    await expect
+      .poll(async () => {
+        return await page.evaluate(() => {
+          const getState = (window as any).__timelineInteraction;
+          return getState ? getState()?.mode : null;
+        });
+      })
+      .toBe('idle');
+
+    // Capture outer thread identity + initial slots + initial X positions
+    const outer = await page.evaluate(() => {
+      const db = (window as any).__db;
+      const rows = db.exec("SELECT id, thread_id, role, slot FROM nodes ORDER BY slot")[0]?.values ?? [];
+      const outerThreadId = rows[0]?.[1];
+      const openRow = rows.find((r: any[]) => r[1] === outerThreadId && r[2] === 'open');
+      const closeRow = rows.find((r: any[]) => r[1] === outerThreadId && r[2] === 'close');
+      return {
+        threadId: outerThreadId,
+        openId: openRow?.[0],
+        closeId: closeRow?.[0],
+        openSlot: openRow?.[3],
+        closeSlot: closeRow?.[3],
+      };
+    });
+
+    expect(outer.threadId).toBeTruthy();
+    expect(outer.openId).toBeTruthy();
+    expect(outer.closeId).toBeTruthy();
+
+    const outerOpenPos0 = await page
+      .locator(`[data-node-id="${outer.openId}"]`)
+      .evaluate((el) => {
+        const m = (el as unknown as SVGGElement).getCTM();
+        return m ? { x: m.e, y: m.f } : null;
+      });
+    const outerClosePos0 = await page
+      .locator(`[data-node-id="${outer.closeId}"]`)
+      .evaluate((el) => {
+        const m = (el as unknown as SVGGElement).getCTM();
+        return m ? { x: m.e, y: m.f } : null;
+      });
+    expect(outerOpenPos0).not.toBeNull();
+    expect(outerClosePos0).not.toBeNull();
+
+    // Insert an inner thread between the outer open and outer close nodes.
+    // impl: we do deterministic DB manipulation + reload to avoid relying on hover insertion here.
+    await page.evaluate(async ({ openSlot }) => {
+      const boundary = openSlot + 1;
+      const db = (window as any).__db;
+      const save = (window as any).__saveDb;
+      const reload = (window as any).__reloadStore;
+
+      const innerThreadId = crypto.randomUUID();
+      const innerOpenId = crypto.randomUUID();
+      const innerCloseId = crypto.randomUUID();
+
+      // Shift existing slots to make room for the inserted pair.
+      db.run('UPDATE nodes SET slot = slot + 2 WHERE slot >= ?', [boundary]);
+
+      db.run(
+        `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+        [innerOpenId, null, innerThreadId, 'character', 'open', boundary, '', '']
+      );
+      db.run(
+        `INSERT INTO nodes (id, container_id, thread_id, type, role, slot, title, description, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+        [innerCloseId, null, innerThreadId, 'character', 'close', boundary + 1, '', '']
+      );
+
+      await save();
+      await reload();
+    }, { openSlot: outer.openSlot });
+    await page.waitForTimeout(300);
+
+    // Debug/assert: inner insertion produced 4 nodes in the DB and in the DOM
+    const afterInsertCounts = await page.evaluate(() => {
+      const db = (window as any).__db;
+      const dbCount = db.exec('SELECT COUNT(*) FROM nodes')[0]?.values?.[0]?.[0] ?? 0;
+      const domIds = Array.from(document.querySelectorAll('[data-testid="node"]')).map((n) =>
+        (n as Element).getAttribute('data-node-id')
+      );
+      return { dbCount, domCount: domIds.length, domIds };
+    });
+    expect(afterInsertCounts.dbCount).toBe(4);
+    expect(afterInsertCounts.domCount).toBe(4);
+
+    // Confirm outer close shifted (slot increased) while outer open remains
+    const outerAfterInsert = await page.evaluate((outerThreadId: string) => {
+      const db = (window as any).__db;
+      const rows = db.exec("SELECT role, slot FROM nodes WHERE thread_id = ? ORDER BY slot", [outerThreadId])[0]?.values ?? [];
+      const open = rows.find((r: any[]) => r[0] === 'open')?.[1];
+      const close = rows.find((r: any[]) => r[0] === 'close')?.[1];
+      return { open, close };
+    }, outer.threadId);
+    expect(outerAfterInsert.open).toBe(outer.openSlot);
+    expect(outerAfterInsert.close).toBeGreaterThan(outer.closeSlot);
+
+    // Identify the inner thread id (anything not outer.threadId)
+    const inner = await page.evaluate((outerThreadId: string) => {
+      const db = (window as any).__db;
+      const rows = db.exec("SELECT DISTINCT thread_id FROM nodes ORDER BY thread_id")[0]?.values ?? [];
+      const ids = rows.map((r: any[]) => r[0]);
+      const innerThreadId = ids.find((id: string) => id !== outerThreadId) ?? null;
+      const innerNodeId = innerThreadId
+        ? (db.exec("SELECT id FROM nodes WHERE thread_id = ? LIMIT 1", [innerThreadId])[0]?.values?.[0]?.[0] ?? null)
+        : null;
+      return { threadId: innerThreadId, anyNodeId: innerNodeId };
+    }, outer.threadId);
+
+    expect(inner.threadId).toBeTruthy();
+    expect(inner.anyNodeId).toBeTruthy();
+
+    // Delete inner thread via UI trash button
+    const innerNode = page.locator(`[data-node-id="${inner.anyNodeId}"]`);
+    await expect(innerNode).toBeVisible({ timeout: 5000 });
+    await innerNode.hover();
+    await page.waitForTimeout(150);
+    const innerTrash = innerNode.locator('.trash-button');
+    await expect(innerTrash).toBeVisible({ timeout: 2000 });
+    await innerTrash.dispatchEvent('click');
+    await page.waitForTimeout(500);
+
+    // Assert: only the outer thread nodes remain and their slots reset to original
+    const finalSlots = await page.evaluate((outerThreadId: string) => {
+      const db = (window as any).__db;
+      const rows = db.exec("SELECT role, slot FROM nodes WHERE thread_id = ? ORDER BY slot", [outerThreadId])[0]?.values ?? [];
+      const open = rows.find((r: any[]) => r[0] === 'open')?.[1];
+      const close = rows.find((r: any[]) => r[0] === 'close')?.[1];
+      const count = db.exec('SELECT COUNT(*) FROM nodes')[0]?.values?.[0]?.[0] ?? 0;
+      return { open, close, count };
+    }, outer.threadId);
+
+    expect(finalSlots.count).toBe(2);
+    expect(finalSlots.open).toBe(outer.openSlot);
+    expect(finalSlots.close).toBe(outer.closeSlot);
+
+    // Assert: UI X positions return to the same values as before insertion
+    const outerOpenPos1 = await page
+      .locator(`[data-node-id="${outer.openId}"]`)
+      .evaluate((el) => {
+        const m = (el as unknown as SVGGElement).getCTM();
+        return m ? { x: m.e, y: m.f } : null;
+      });
+    const outerClosePos1 = await page
+      .locator(`[data-node-id="${outer.closeId}"]`)
+      .evaluate((el) => {
+        const m = (el as unknown as SVGGElement).getCTM();
+        return m ? { x: m.e, y: m.f } : null;
+      });
+
+    expect(outerOpenPos1).toEqual(outerOpenPos0);
+    expect(outerClosePos1).toEqual(outerClosePos0);
+  });
+});
+
 test.describe('story:container-deletion', () => {
   test.beforeEach(async ({ page }) => {
     await setupFreshPage(page);
